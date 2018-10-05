@@ -109,7 +109,7 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 
 	incoming := make(chan UdpMessage, 100)
 	outgoing := make(chan UdpMessage, 100)
-	go UdpWriter(ln, outgoing)
+	go udpWriter(ln, outgoing)
 	go processor(incoming, outgoing)
 
 	for {

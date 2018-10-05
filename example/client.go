@@ -4,6 +4,7 @@ package main
 //Listens on 0.0.0.0, sends anything you type to 192.168.1.10
 
 import (
+	"github.com/donomii/brick"
 	"bufio"
 	"flag"
 	"os"
@@ -14,7 +15,7 @@ import (
 var remoteServ string
 var remotePort int
 
-func processor(incoming, outgoing chan UdpMessage) {
+func processor(incoming, outgoing chan brick.UdpMessage) {
 
 	//message := []byte("Hello out there!")
 	//SendMessage(outgoing, message, remoteServ, remotePort)
@@ -33,7 +34,7 @@ func processor(incoming, outgoing chan UdpMessage) {
 		fmt.Print(">")
 		text, _ := reader.ReadString('\n')
 		fmt.Println("\nOutgoing: " + text)
-		SendMessage(outgoing, []byte(text), remoteServ, remotePort)
+		brick.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
 	}
 }
 
@@ -49,5 +50,5 @@ func main() {
 
 	//NOTE "ip" is the ip address to listen on.  You do not provide the remote server details here!
 	//Same for "port"!
-	StartRetryServer(ip, port, processor)
+	brick.StartRetryUdp(ip, port, processor)
 }
