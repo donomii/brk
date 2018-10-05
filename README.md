@@ -38,6 +38,8 @@ you also have to provide a processor function, to deal with the communication ch
 ```go
 func processor(incoming, outgoing chan UdpMessage) {
 	message := []byte("Hello out there!")
+	remoteServ := "a.server.somwhere.com"
+	remotePort := "6000"
 	SendMessage(outgoing, message, remoteServ, remotePort)
 
 
