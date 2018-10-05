@@ -1,4 +1,4 @@
-package main
+package brick
 //A UDP library with message retrying
 //
 //This is a UDP message-passing library that is capable of retrying messages that timeout.
