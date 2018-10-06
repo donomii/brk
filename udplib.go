@@ -34,7 +34,7 @@ seenCache := map[int]bool{}
 for {
 	// here is where you want to do stuff like read or write to client
 
-	buffer := make([]byte, 256*256)
+	buffer := make([]byte, 32768)
 
 	n, addr, err := conn.ReadFromUDP(buffer)
 
@@ -83,7 +83,7 @@ for {
 func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
 	for mess := range outgoing {
 		bson, _ := bson.Marshal(mess)
-		//fmt.Printf("Sending to '%v'\n", mess.Address)
+		fmt.Printf("Write sending packet to '%v:%v'\n", mess.Address, mess.Port)
 		var straddr string = mess.Address
 		addrs, err := net.LookupHost(mess.Address)
 		if err == nil {
@@ -125,8 +125,8 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 
 	defer ln.Close()
 
-	incoming := make(chan UdpMessage, 100)
-	outgoing := make(chan UdpMessage, 100)
+	incoming := make(chan UdpMessage, 2)
+	outgoing := make(chan UdpMessage, 2)
 	go udpWriter(ln, outgoing)
 	go processor(incoming, outgoing)
 
@@ -146,8 +146,8 @@ func SendMessage(outchan chan UdpMessage, data []byte, server string, port int) 
 func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage)) (chan UdpMessage, chan UdpMessage) {
 	cacheLock := sync.Mutex{}
 	cache := map[int]UdpMessage{}
-	appincoming := make(chan UdpMessage, 100)
-	appoutgoing := make(chan UdpMessage, 100)
+	appincoming := make(chan UdpMessage, 2)
+	appoutgoing := make(chan UdpMessage, 2)
 	go processor(appincoming, appoutgoing)
 
 	retryProcessor := func(netincoming, netoutgoing chan UdpMessage) {
