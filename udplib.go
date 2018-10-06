@@ -30,7 +30,8 @@ func getSequence() int {
 	return sequence
 }
 func handleUDPConnection(conn *net.UDPConn, incoming, outgoing chan UdpMessage) {
-
+seenCache := map[int]bool{}
+for {
 	// here is where you want to do stuff like read or write to client
 
 	buffer := make([]byte, 1024)
@@ -51,15 +52,30 @@ func handleUDPConnection(conn *net.UDPConn, incoming, outgoing chan UdpMessage) 
 	if err != nil {
 		panic(err)
 	}
+	
 	//w := w_int.(UdpMessage)
 	w.Address = fmt.Sprintf("%v", addr.IP)
 	//fmt.Println("Remote address: " + w.Address)
 	w.Port = addr.Port
 	//fmt.Printf("Remote port: %v\n", w.Port)
+	//Reliability testing.  Throw away 50% of incoming packets to force retransmission
 	if rand.Float32() < 0.5 {
+	//fmt.Printf("Acknowledging message %v\n", m.Sequence)
+			
+		//We must pass acks before checking the seencache or the peer will retransmit them forever
+		if w.Type == "Ack" {
 		incoming <- w
+		} else {
+		outgoing <- UdpMessage{[]byte{}, w.Address, w.Port, w.Sequence, "Ack", time.Now()}
+		if !seenCache[w.Sequence] {
+			seenCache[w.Sequence] = true
+			incoming <- w
+		} else {
+			fmt.Printf("Discarding duplicate (%v)\n", w.Sequence)
+		}
+		}
 	}
-
+}
 }
 
 func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
@@ -112,10 +128,10 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 	go udpWriter(ln, outgoing)
 	go processor(incoming, outgoing)
 
-	for {
+	
 		// wait for UDP client to connect
 		handleUDPConnection(ln, incoming, outgoing)
-	}
+	
 	return incoming, outgoing
 }
 
@@ -174,8 +190,7 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 					delete(cache, m.Sequence)
 					cacheLock.Unlock()
 				} else {
-					//fmt.Printf("Acknowledging message %v\n", m.Sequence)
-					netoutgoing <- UdpMessage{[]byte{}, m.Address, m.Port, m.Sequence, "Ack", time.Now()}
+					
 					appincoming <- m
 				}
 			}
