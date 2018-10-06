@@ -34,7 +34,7 @@ seenCache := map[int]bool{}
 for {
 	// here is where you want to do stuff like read or write to client
 
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, 256*256)
 
 	n, addr, err := conn.ReadFromUDP(buffer)
 
@@ -59,7 +59,7 @@ for {
 	w.Port = addr.Port
 	//fmt.Printf("Remote port: %v\n", w.Port)
 	//Reliability testing.  Throw away 50% of incoming packets to force retransmission
-	if rand.Float32() < 0.5 {
+	if rand.Float32() < 0.8 {
 	//fmt.Printf("Acknowledging message %v\n", m.Sequence)
 			
 		//We must pass acks before checking the seencache or the peer will retransmit them forever
@@ -74,6 +74,8 @@ for {
 			fmt.Printf("Discarding duplicate (%v)\n", w.Sequence)
 		}
 		}
+	} else {
+		fmt.Printf("Discarding message %v to simulate bad connection\n", w.Sequence)
 	}
 }
 }
@@ -168,7 +170,7 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 						//fmt.Printf("Checking sequence val %v\n", k)
 						if time.Now().Sub(v.Cached).Seconds() > 2.0 {
 							//Retransmit
-							fmt.Printf("Retransmitting %v\n", v.Sequence)
+							fmt.Printf("Retransmitting %v to %v:%v\n", v.Sequence, v.Address, v.Port)
 							v.Cached = time.Now()
 							cache[v.Sequence] = v
 							//fmt.Printf("Retransmit address is %+v\n", v.Address)
