@@ -153,8 +153,9 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 	retryProcessor := func(netincoming, netoutgoing chan UdpMessage) {
 		go func() {
 			for {
-				cacheLock.Lock()
+				
 				time.Sleep(1 * time.Second)
+				cacheLock.Lock()
 				var keys []int
 				for k, _ := range cache {
 					//fmt.Printf("Cache has key %v\n", k)
@@ -180,7 +181,6 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 						//fmt.Printf("Key %v not found in cache\n", k )
 					}
 				}
-
 				cacheLock.Unlock()
 			}
 		}()
