@@ -1,4 +1,4 @@
-package brk
+package brick
 //A UDP library with message retrying
 //
 //This is a UDP message-passing library that is capable of retrying messages that timeout.
@@ -24,13 +24,14 @@ type UdpMessage struct {
 }
 
 var sequence int = 2
+var Qlength int = 2000
 
 func getSequence() int {
 	sequence = sequence + 1
 	return sequence
 }
 func handleUDPConnection(conn *net.UDPConn, incoming, outgoing chan UdpMessage) {
-seenCache := map[int]bool{}
+
 for {
 	// here is where you want to do stuff like read or write to client
 
@@ -44,46 +45,29 @@ for {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	outbuff := make([]byte, n)
-	copy(outbuff, buffer[:n])
-	var w UdpMessage
-	err = bson.Unmarshal(outbuff, &w)
-	if err != nil {
-		panic(err)
-	}
-	
-	//w := w_int.(UdpMessage)
-	w.Address = fmt.Sprintf("%v", addr.IP)
-	//fmt.Println("Remote address: " + w.Address)
-	w.Port = addr.Port
-	//fmt.Printf("Remote port: %v\n", w.Port)
-	//Reliability testing.  Throw away 50% of incoming packets to force retransmission
-	if rand.Float32() < 0.8 {
-	//fmt.Printf("Acknowledging message %v\n", m.Sequence)
-			
-		//We must pass acks before checking the seencache or the peer will retransmit them forever
-		if w.Type == "Ack" {
+	go func() {
+		outbuff := make([]byte, n)
+		copy(outbuff, buffer[:n])
+		var w UdpMessage
+		err = bson.Unmarshal(outbuff, &w)
+		if err != nil {
+			panic(err)
+		}
+		
+		//w := w_int.(UdpMessage)
+		w.Address = fmt.Sprintf("%v", addr.IP)
+		//fmt.Println("Remote address: " + w.Address)
+		w.Port = addr.Port
+		//fmt.Printf("Remote port: %v\n", w.Port)
 		incoming <- w
-		} else {
-		outgoing <- UdpMessage{[]byte{}, w.Address, w.Port, w.Sequence, "Ack", time.Now()}
-		if !seenCache[w.Sequence] {
-			seenCache[w.Sequence] = true
-			incoming <- w
-		} else {
-			fmt.Printf("Discarding duplicate (%v)\n", w.Sequence)
-		}
-		}
-	} else {
-		fmt.Printf("Discarding message %v to simulate bad connection\n", w.Sequence)
-	}
+	}()
 }
 }
 
 func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
 	for mess := range outgoing {
 		bson, _ := bson.Marshal(mess)
-		fmt.Printf("Write sending packet to '%v:%v'\n", mess.Address, mess.Port)
+		//	fmt.Printf("Write sending packet to '%v:%v'\n", mess.Address, mess.Port)
 		var straddr string = mess.Address
 		addrs, err := net.LookupHost(mess.Address)
 		if err == nil {
@@ -125,8 +109,8 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 
 	defer ln.Close()
 
-	incoming := make(chan UdpMessage, 2)
-	outgoing := make(chan UdpMessage, 2)
+	incoming := make(chan UdpMessage, Qlength)
+	outgoing := make(chan UdpMessage, Qlength)
 	go udpWriter(ln, outgoing)
 	go processor(incoming, outgoing)
 
@@ -144,36 +128,45 @@ func SendMessage(outchan chan UdpMessage, data []byte, server string, port int) 
 
 //This is the UDP connection that retries failed messages.  Otherwise, it works exactly like StartUdp.  It does not detect duplicate messages, you will have to do that yourself.  This is probably the server you want to use.
 func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage)) (chan UdpMessage, chan UdpMessage) {
+	seenCache := map[int]bool{}
 	cacheLock := sync.Mutex{}
 	cache := map[int]UdpMessage{}
-	appincoming := make(chan UdpMessage, 2)
-	appoutgoing := make(chan UdpMessage, 2)
+	appincoming := make(chan UdpMessage, Qlength)
+	appoutgoing := make(chan UdpMessage, Qlength)
 	go processor(appincoming, appoutgoing)
 
 	retryProcessor := func(netincoming, netoutgoing chan UdpMessage) {
 		go func() {
 			for {
 				
-				time.Sleep(1 * time.Second)
-				cacheLock.Lock()
+				time.Sleep(5 * time.Second)
+				
 				var keys []int
+				cacheLock.Lock()
 				for k, _ := range cache {
 					//fmt.Printf("Cache has key %v\n", k)
+					
 					keys = append(keys, k)
+					
 				}
+				cacheLock.Unlock()
 				if len(keys) > 0 {
 					fmt.Printf("%v messages waiting for retransmission...\n", len(keys))
 				}
 				for _, k := range keys {
 					//fmt.Printf("Checking sequence %v\n", k)
+					cacheLock.Lock()
 					v, ok := cache[k]
+					cacheLock.Unlock()
 					if ok {
 						//fmt.Printf("Checking sequence val %v\n", k)
 						if time.Now().Sub(v.Cached).Seconds() > 2.0 {
 							//Retransmit
 							fmt.Printf("Retransmitting %v to %v:%v\n", v.Sequence, v.Address, v.Port)
 							v.Cached = time.Now()
+							cacheLock.Lock()
 							cache[v.Sequence] = v
+							cacheLock.Unlock()
 							//fmt.Printf("Retransmit address is %+v\n", v.Address)
 							netoutgoing <- v
 						}
@@ -181,7 +174,7 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 						//fmt.Printf("Key %v not found in cache\n", k )
 					}
 				}
-				cacheLock.Unlock()
+				
 			}
 		}()
 		go func() {
@@ -193,7 +186,22 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 					cacheLock.Unlock()
 				} else {
 					
-					appincoming <- m
+	//Reliability testing.  Throw away 50% of incoming packets to force retransmission
+	if rand.Float32() < 0.8 {
+	fmt.Printf("Acknowledging message %v\n", m.Sequence)
+			
+		//We must respond with acks before checking the seencache or the peer will retransmit them forever
+		netoutgoing <- UdpMessage{[]byte{}, m.Address, m.Port, m.Sequence, "Ack", time.Now()}
+		if !seenCache[m.Sequence] {
+			seenCache[m.Sequence] = true
+			appincoming <- m
+		} else {
+			fmt.Printf("Discarding duplicate (%v)\n", m.Sequence)
+		}
+		
+	} else {
+		fmt.Printf("Discarding message %v to simulate bad connection\n", m.Sequence)
+	}
 				}
 			}
 		}()
