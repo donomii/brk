@@ -6,7 +6,7 @@ package main
 // Note that you don't specify the /other/ computer when you start the conenction.  You can send a packet to any server without starting a connection.  Just put the IP address and port in the SendMessage() function.
 
 import (
-	"github.com/donomii/brick"
+	"github.com/donomii/brk"
 	"bufio"
 	"flag"
 	"os"
@@ -32,11 +32,14 @@ func processor(incoming, outgoing chan brick.UdpMessage) {
 
 	//Read lines from STDIN and send them to the other computer
 	reader := bufio.NewReader(os.Stdin)
+	fmt.Print(">")
 	for {
-		fmt.Print(">")
-		text, _ := reader.ReadString('\n')
-		fmt.Println("\nOutgoing: " + text)
-		brick.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
+		text, err := reader.ReadString('\n')
+		if err == nil {			
+			fmt.Println("\nOutgoing: " + text)
+			brick.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
+			fmt.Print(">")
+		}
 	}
 }
 
