@@ -17,7 +17,7 @@ import (
 var remoteServ string
 var remotePort int
 
-func processor(incoming, outgoing chan brick.UdpMessage) {
+func processor(incoming, outgoing chan brk.UdpMessage) {
 
 	//message := []byte("Hello out there!")
 	//SendMessage(outgoing, message, remoteServ, remotePort)
@@ -37,7 +37,7 @@ func processor(incoming, outgoing chan brick.UdpMessage) {
 		text, err := reader.ReadString('\n')
 		if err == nil {			
 			fmt.Println("\nOutgoing: " + text)
-			brick.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
+			brk.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
 			fmt.Print(">")
 		}
 	}
@@ -55,5 +55,5 @@ func main() {
 
 	//NOTE "ip" is the ip address to listen on.  You do not provide the remote server details here!
 	//Same for "port"!
-	brick.StartRetryUdp(ip, port, processor)
+	brk.StartRetryUdp(ip, port, processor)
 }
