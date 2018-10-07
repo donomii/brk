@@ -2,6 +2,8 @@ package main
 //Use:  client.exe -ip 0.0.0.0 192.168.1.10 6000
 //
 //Listens on 0.0.0.0, sends anything you type to 192.168.1.10
+//
+// Note that you don't specify the /other/ computer when you start the conenction.  You can send a packet to any server without starting a connection.  Just put the IP address and port in the SendMessage() function.
 
 import (
 	"github.com/donomii/brick"
