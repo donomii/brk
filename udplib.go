@@ -5,6 +5,7 @@ package brk
 
 
 import (
+	"github.com/ccding/go-stun/stun"
 	"fmt"
 	"github.com/rcrowley/go-bson"
 	"log"
@@ -90,7 +91,37 @@ func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
 //
 //The incoming data can be read from packet.Data, after you read the packet from _incoming_.
 func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan UdpMessage)) (chan UdpMessage, chan UdpMessage) {
-	service := hostName + ":" + portNum
+
+
+	client := stun.NewClient()
+	// The default addr (stun.DefaultServerAddr) will be used unless we
+	// call SetServerAddr.
+	//client.SetServerAddr(*serverAddr)
+	// Non verbose mode will be used by default unless we call
+	// SetVerbose(true) or SetVVerbose(true).
+	//client.SetVerbose(*v || *vv || *vvv)
+	//client.SetVVerbose(*vv || *vvv)
+	// Discover the NAT and return the result.
+	nat, host, err := client.Discover()
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	fmt.Println("NAT Type:", nat)
+	if host != nil {
+		fmt.Println("External IP Family:", host.Family())
+		fmt.Println("External IP:", host.IP())
+		fmt.Println("External Port:", host.Port())
+	} else {
+		fmt.Println("Could not find host")
+	}
+
+	//service := hostName + ":" + portNum
+	//service := host.IP() + ":" + fmt.Sprintf("%v", host.Port())
+	service := "0.0.0.0:" + fmt.Sprintf("%v", host.Port())
+	fmt.Println("Starting server " + service)
+
 
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
 
