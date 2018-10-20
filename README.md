@@ -1,4 +1,4 @@
-# Brick
+# Brk
 
 A UDP library with message retrying
 
@@ -8,7 +8,7 @@ This is a UDP message-passing library that is capable of retrying messages that 
 
 ## Install
 
-	go get -u github.com/donomii/Brick
+	go get -u github.com/donomii/Brk
 
 ## Use
 
