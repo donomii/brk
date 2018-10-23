@@ -61,5 +61,5 @@ You can send messages at any time after the server starts:
 ```go
     brk.SendMessage(outgoing, message, remoteServ, remotePort)
 ```
-The ```brk.SendMessage``` function is a convenience wrapper to format the outgoing packet and put it into the ```outgoing``` channel.
+The ```brk.SendMessage``` function is a convenience wrapper to format the outgoing packet and put it into the _outgoing_ channel.
 
