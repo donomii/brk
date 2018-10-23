@@ -4,7 +4,7 @@ A UDP library with message retrying
 
 ## Summary
 
-This is a UDP message-passing library that is capable of retrying messages that timeout.  It works at the packet level, rather than turning the connections into streams.  You send a chunk of bytes to the other end, and sometime later, they receive a buffer of bytes.
+This is a UDP message-passing library that is capable of retrying messages that timeout.  It works at the message level, rather than turning the connections into streams.  You send a chunk of bytes to the other end, and sometime later, they receive a buffer of bytes.
 
 ## Install
 
