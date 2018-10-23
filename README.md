@@ -6,6 +6,10 @@ A UDP library with message retrying
 
 This is a UDP message-passing library that is capable of retrying messages that timeout.  It works at the message level, rather than turning the connections into streams.  You send a chunk of bytes to the other end, and sometime later, they receive a buffer of bytes.
 
+## Features
+
+Send a message to any IP address or port without having to _open_ a connection.  Retry failed messages for a period of time.
+
 ## Install
 
 	go get -u github.com/donomii/Brk
