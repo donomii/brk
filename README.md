@@ -40,7 +40,7 @@ func processor(incoming, outgoing chan UdpMessage) {
 	message := []byte("Hello out there!")
 	remoteServ := "a.server.somwhere.com"
 	remotePort := "6000"
-	SendMessage(outgoing, message, remoteServ, remotePort)
+	brk.SendMessage(outgoing, message, remoteServ, remotePort)
 
 
 	//Read incoming messages and print them to the screen
@@ -52,4 +52,10 @@ func processor(incoming, outgoing chan UdpMessage) {
 }
 ```
 
+You can send messages at any time after the server starts:
+
+```go
+    brk.SendMessage(outgoing, message, remoteServ, remotePort)
+```
+The ```brk.SendMessage``` function is a convenience wrapper to format the outgoing packet and put it into the ```outgoing``` channel.
 
