@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/donomii/brk.svg?branch=master)](https://travis-ci.org/donomii/brk)
+
 # Brk
 
 A UDP library with message retrying
