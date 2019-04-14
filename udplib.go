@@ -54,7 +54,7 @@ for {
 		if err != nil {
 			panic(err)
 		}
-		
+
 		//w := w_int.(UdpMessage)
 		w.Address = fmt.Sprintf("%v", addr.IP)
 		//fmt.Println("Remote address: " + w.Address)
@@ -145,10 +145,10 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 	go udpWriter(ln, outgoing)
 	go processor(incoming, outgoing)
 
-	
+
 		// wait for UDP client to connect
 		handleUDPConnection(ln, incoming, outgoing)
-	
+
 	return incoming, outgoing
 }
 
@@ -169,7 +169,7 @@ func StartRetryUdp(hostName, portNum string, processor func(a, b chan UdpMessage
 	retryProcessor := func(netincoming, netoutgoing chan UdpMessage) {
 		go func() {
 			for {
-				
+
 				time.Sleep(5 * time.Second)
 				
 				var keys []int
