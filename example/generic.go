@@ -26,7 +26,7 @@ func processor(incoming, outgoing chan brk.UdpMessage) {
 	//Read incoming messages and print them to the screen
 	go func() {
 		for mess := range incoming {
-			fmt.Printf("Incoming: %v\n", string(mess.Data))
+			fmt.Printf("Incoming:(%v,%v) %v\n", mess.Address, mess.Port, string(mess.Data))
 		}
 	}()
 
