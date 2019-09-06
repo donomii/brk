@@ -1,4 +1,5 @@
 [![Build Status](https://travis-ci.org/donomii/brk.svg?branch=master)](https://travis-ci.org/donomii/brk)
+[![GoDoc](https://godoc.org/github.com/donomii/brk?status.svg)](https://godoc.org/github.com/donomii/brk)
 
 # Brk
 
