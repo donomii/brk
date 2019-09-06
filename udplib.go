@@ -152,7 +152,7 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 	return incoming, outgoing
 }
 
-//_SendMessage_ sends _data_ to _server_, via _outchan_.  You get _outchan_ passed to the _processor_ function, that you provide to StartUdp
+// *SendMessage* sends _data_ to _server_, via _outchan_.  You get _outchan_ passed to the _processor_ function, that you provide to StartUdp
 func SendMessage(outchan chan UdpMessage, data []byte, server string, port int) {
 	outchan <- UdpMessage{data, server, port, getSequence(), "", time.Now()}
 }
