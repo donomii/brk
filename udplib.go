@@ -5,9 +5,9 @@ package brk
 
 
 import (
+	"encoding/json"
 	"github.com/ccding/go-stun/stun"
 	"fmt"
-	"github.com/rcrowley/go-bson"
 	"log"
 	"math/rand"
 	"net"
@@ -50,7 +50,7 @@ for {
 		outbuff := make([]byte, n)
 		copy(outbuff, buffer[:n])
 		var w UdpMessage
-		err = bson.Unmarshal(outbuff, &w)
+		err = json.Unmarshal(outbuff, &w)
 		if err != nil {
 			panic(err)
 		}
@@ -67,7 +67,7 @@ for {
 
 func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
 	for mess := range outgoing {
-		bson, _ := bson.Marshal(mess)
+		json, _ := json.Marshal(mess)
 		//	fmt.Printf("Write sending packet to '%v:%v'\n", mess.Address, mess.Port)
 		var straddr string = mess.Address
 		addrs, err := net.LookupHost(mess.Address)
@@ -77,7 +77,7 @@ func udpWriter(conn *net.UDPConn, outgoing chan UdpMessage) {
 			log.Printf("Could not lookup target address: %v\n", mess.Address)
 		}
 		ip, _, _ := net.ParseCIDR(straddr + "/32")
-		_, err = conn.WriteToUDP(bson, &net.UDPAddr{IP: ip, Port: mess.Port})
+		_, err = conn.WriteToUDP(json, &net.UDPAddr{IP: ip, Port: mess.Port})
 
 		if err != nil {
 			log.Println(err)
