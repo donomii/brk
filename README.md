@@ -80,7 +80,7 @@ go run ./example -ip 127.0.0.1 -port 6001 127.0.0.1 6000
 
 ## RetryConfig
 
-`DefaultRetryConfig` is ready to edit:
+Start with the defaults, then override the retry settings you want:
 
 ```go
 config := brk.DefaultRetryConfig()
