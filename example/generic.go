@@ -1,4 +1,5 @@
 package main
+
 //Use:  client.exe -ip 0.0.0.0 192.168.1.10 6000
 //
 //Listens on 0.0.0.0, sends anything you type to 192.168.1.10
@@ -6,12 +7,13 @@ package main
 // Note that you don't specify the /other/ computer when you start the conenction.  You can send a packet to any server without starting a connection.  Just put the IP address and port in the SendMessage() function.
 
 import (
-	"github.com/donomii/brk"
 	"bufio"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
-	"fmt"
+
+	"github.com/donomii/brk"
 )
 
 var remoteServ string
@@ -21,7 +23,6 @@ func processor(incoming, outgoing chan brk.UdpMessage) {
 
 	//message := []byte("Hello out there!")
 	//SendMessage(outgoing, message, remoteServ, remotePort)
-
 
 	//Read incoming messages and print them to the screen
 	go func() {
@@ -35,7 +36,10 @@ func processor(incoming, outgoing chan brk.UdpMessage) {
 	fmt.Print(">")
 	for {
 		text, err := reader.ReadString('\n')
-		if err == nil {			
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read stdin failed: expected newline-terminated text, received %v\n", err)
+			return
+		} else {
 			fmt.Println("\nOutgoing: " + text)
 			brk.SendMessage(outgoing, []byte(text), remoteServ, remotePort)
 			fmt.Print(">")
@@ -50,8 +54,17 @@ func main() {
 	flag.StringVar(&port, "port", "1234", "listening port")
 	flag.Parse()
 
+	if flag.NArg() != 2 {
+		flag.Usage()
+		return
+	}
 	remoteServ = flag.Arg(0)
-	remotePort, _ = strconv.Atoi(flag.Arg(1))
+	var err error
+	remotePort, err = strconv.Atoi(flag.Arg(1))
+	if err != nil || remotePort < 1 || remotePort > 65535 {
+		fmt.Fprintf(os.Stderr, "invalid remote port %q: expected integer from 1 to 65535\n", flag.Arg(1))
+		return
+	}
 
 	//NOTE "ip" is the ip address to listen on.  You do not provide the remote server details here!
 	//Same for "port"!
