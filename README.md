@@ -1,4 +1,5 @@
 [![Go](https://github.com/donomii/brk/actions/workflows/test.yml/badge.svg)](https://github.com/donomii/brk/actions/workflows/test.yml)
+[![Codecov](https://codecov.io/gh/donomii/brk/branch/master/graph/badge.svg)](https://app.codecov.io/github/donomii/brk)
 [![pkg.go.dev](https://pkg.go.dev/badge/github.com/donomii/brk.svg)](https://pkg.go.dev/github.com/donomii/brk)
 
 # brk
