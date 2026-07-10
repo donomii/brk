@@ -6,6 +6,7 @@ import (
 	"net"
 )
 
+// Close stops a plain UDP server and waits for its network I/O loops to exit.
 func (server *UdpServer) Close() error {
 	server.closeOnce.Do(func() {
 		server.cancel()
@@ -18,31 +19,40 @@ func (server *UdpServer) Close() error {
 	return server.closeErr
 }
 
+// Done closes after the plain UDP server's network I/O loops exit.
 func (server *UdpServer) Done() <-chan struct{} {
 	return server.done
 }
 
+// LocalAddress returns the bound local UDP address.
 func (server *UdpServer) LocalAddress() string {
 	return server.localAddress
 }
 
+// Stats returns a point-in-time copy of the delivery counters.
 func (server *UdpServer) Stats() DeliveryStatsSnapshot {
 	return server.stats.Snapshot()
 }
 
+// Close stops a retry server and waits for its retry and network I/O loops to exit.
 func (server *RetryUdpServer) Close() error {
 	server.cancel()
-	return server.Network.Close()
+	err := server.Network.Close()
+	<-server.done
+	return err
 }
 
+// Done closes after the retry server's retry and network I/O loops exit.
 func (server *RetryUdpServer) Done() <-chan struct{} {
-	return server.Network.Done()
+	return server.done
 }
 
+// LocalAddress returns the retry server's bound local UDP address.
 func (server *RetryUdpServer) LocalAddress() string {
 	return server.Network.LocalAddress()
 }
 
+// Stats returns a point-in-time copy of the retry server's delivery counters.
 func (server *RetryUdpServer) Stats() DeliveryStatsSnapshot {
 	return server.Network.Stats()
 }

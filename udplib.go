@@ -2,6 +2,8 @@ package brk
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +13,20 @@ import (
 	"time"
 )
 
-var sequence int = 2
+var sequence int = makeInitialSequence()
 var sequenceLock sync.Mutex
+
+// Qlength is the legacy default channel capacity. New code should set RetryConfig.QueueLength.
 var Qlength int = 2000
+
+func makeInitialSequence() int {
+	var value [4]byte
+	_, err := rand.Read(value[:])
+	if err != nil {
+		panic(fmt.Sprintf("initialize UDP sequence failed: expected four random bytes, received error: %v", err))
+	}
+	return int(binary.BigEndian.Uint32(value[:]) & maxInitialSequence)
+}
 
 func getSequence() int {
 	sequenceLock.Lock()
@@ -25,6 +38,9 @@ func getSequence() int {
 func startUdpContext(ctx context.Context, hostName, portNum string, queueLength int, stats *DeliveryStats, processor func(incoming, outgoing chan UdpMessage)) (*UdpServer, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("start UDP server failed: expected non-nil context")
+	}
+	if processor == nil {
+		return nil, fmt.Errorf("start UDP server failed: expected non-nil processor")
 	}
 	if queueLength < 1 {
 		return nil, fmt.Errorf("start UDP server failed: expected queue length greater than zero, received %d", queueLength)
@@ -52,10 +68,25 @@ func startUdpContext(ctx context.Context, hostName, portNum string, queueLength 
 		done:         make(chan struct{}),
 	}
 
-	go closeUDPConnOnContext(serverCtx, conn)
-	go udpWriter(serverCtx, conn, server.Outgoing, stats)
+	networkTasks := sync.WaitGroup{}
+	networkTasks.Add(3)
+	go func() {
+		defer networkTasks.Done()
+		closeUDPConnOnContext(serverCtx, conn)
+	}()
+	go func() {
+		defer networkTasks.Done()
+		udpWriter(serverCtx, conn, server.Outgoing, stats)
+	}()
 	go processor(server.Incoming, server.Outgoing)
-	go handleUDPConnection(serverCtx, conn, server.Incoming, stats, server.done)
+	go func() {
+		defer networkTasks.Done()
+		handleUDPConnection(serverCtx, conn, server.Incoming, stats)
+	}()
+	go func() {
+		networkTasks.Wait()
+		close(server.done)
+	}()
 
 	return server, nil
 }
@@ -68,8 +99,8 @@ func closeUDPConnOnContext(ctx context.Context, conn *net.UDPConn) {
 	}
 }
 
-func handleUDPConnection(ctx context.Context, conn *net.UDPConn, incoming chan UdpMessage, stats *DeliveryStats, done chan struct{}) {
-	defer close(done)
+func handleUDPConnection(ctx context.Context, conn *net.UDPConn, incoming chan UdpMessage, stats *DeliveryStats) {
+	defer close(incoming)
 	for {
 		message, err := readUDPMessage(conn)
 		if err != nil {
@@ -103,14 +134,20 @@ func isUDPServerClosed(ctx context.Context, err error) bool {
 }
 
 func readUDPMessage(conn *net.UDPConn) (UdpMessage, error) {
-	buffer := make([]byte, maxPacketSize)
+	buffer := make([]byte, packetReadSize)
 	n, addr, err := conn.ReadFromUDP(buffer)
 	if err != nil {
 		return UdpMessage{}, fmt.Errorf("read UDP packet: %w", err)
 	}
+	return decodeUDPMessage(buffer[:n], addr)
+}
 
+func decodeUDPMessage(packet []byte, addr *net.UDPAddr) (UdpMessage, error) {
+	if len(packet) > maxPacketSize {
+		return UdpMessage{}, fmt.Errorf("decode UDP packet from %v: expected at most %d encoded bytes, received at least %d", addr, maxPacketSize, len(packet))
+	}
 	var message UdpMessage
-	err = json.Unmarshal(buffer[:n], &message)
+	err := json.Unmarshal(packet, &message)
 	if err != nil {
 		return UdpMessage{}, fmt.Errorf("decode UDP packet from %v as brk.UdpMessage: %w", addr, err)
 	}
@@ -141,13 +178,9 @@ func udpWriter(ctx context.Context, conn *net.UDPConn, outgoing chan UdpMessage,
 }
 
 func writeUDPMessage(conn *net.UDPConn, message UdpMessage) error {
-	if message.Port < 1 || message.Port > 65535 {
-		return fmt.Errorf("expected UDP target port in 1..65535, received %d", message.Port)
-	}
-
-	packet, err := json.Marshal(message)
+	packet, err := encodeUDPMessage(message)
 	if err != nil {
-		return fmt.Errorf("encode brk.UdpMessage sequence %d as JSON: %w", message.Sequence, err)
+		return err
 	}
 
 	address := net.JoinHostPort(message.Address, strconv.Itoa(message.Port))
@@ -162,6 +195,21 @@ func writeUDPMessage(conn *net.UDPConn, message UdpMessage) error {
 	}
 
 	return nil
+}
+
+func encodeUDPMessage(message UdpMessage) ([]byte, error) {
+	if message.Port < 1 || message.Port > 65535 {
+		return nil, fmt.Errorf("expected UDP target port in 1..65535, received %d", message.Port)
+	}
+
+	packet, err := json.Marshal(message)
+	if err != nil {
+		return nil, fmt.Errorf("encode brk.UdpMessage sequence %d as JSON: %w", message.Sequence, err)
+	}
+	if len(packet) > maxPacketSize {
+		return nil, fmt.Errorf("encode brk.UdpMessage sequence %d for UDP: expected at most %d encoded bytes, received %d from %d payload bytes", message.Sequence, maxPacketSize, len(packet), len(message.Data))
+	}
+	return packet, nil
 }
 
 // StartUdpContext starts a local UDP server and returns immediately with a closeable server handle.
@@ -183,7 +231,8 @@ func StartUdp(hostName, portNum string, processor func(incoming, outgoing chan U
 	return server.Incoming, server.Outgoing
 }
 
-// SendMessage queues data for delivery to server:port.
+// SendMessage copies data and queues it for delivery to server:port.
 func SendMessage(outchan chan UdpMessage, data []byte, server string, port int) {
-	outchan <- UdpMessage{Data: data, Address: server, Port: port, Sequence: getSequence(), Type: "", Cached: time.Now()}
+	payload := append([]byte(nil), data...)
+	outchan <- UdpMessage{Data: payload, Address: server, Port: port, Sequence: getSequence(), Type: "", Cached: time.Now()}
 }

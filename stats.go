@@ -1,9 +1,11 @@
 package brk
 
+// NewDeliveryStats returns zeroed delivery counters.
 func NewDeliveryStats() *DeliveryStats {
 	return &DeliveryStats{}
 }
 
+// Snapshot returns a concurrency-safe copy of the delivery counters.
 func (stats *DeliveryStats) Snapshot() DeliveryStatsSnapshot {
 	stats.lock.Lock()
 	defer stats.lock.Unlock()

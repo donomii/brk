@@ -11,6 +11,8 @@ import (
 
 const stunMagicCookie uint32 = 0x2112A442
 
+// DiscoverExternalAddress reports the mapping observed for a temporary UDP socket. The socket is closed before this
+// function returns, so the result does not advertise an existing UdpServer.
 func DiscoverExternalAddress(config STUNConfig) (address ExternalAddress, err error) {
 	resolved, err := ResolveSTUNConfig(config)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// DefaultRetryConfig returns the documented retry settings.
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		QueueLength:   Qlength,
@@ -15,6 +16,7 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
+// ResolveRetryConfig fills zero-valued settings with defaults and rejects negative values.
 func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 	defaults := DefaultRetryConfig()
 	if config.QueueLength == 0 {
@@ -48,6 +50,7 @@ func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 	return config, nil
 }
 
+// DefaultSTUNConfig returns the documented STUN server and timeout.
 func DefaultSTUNConfig() STUNConfig {
 	return STUNConfig{
 		Server:  DefaultSTUNServer,
@@ -55,6 +58,7 @@ func DefaultSTUNConfig() STUNConfig {
 	}
 }
 
+// ResolveSTUNConfig fills zero-valued settings with defaults and rejects a negative timeout.
 func ResolveSTUNConfig(config STUNConfig) (STUNConfig, error) {
 	defaults := DefaultSTUNConfig()
 	if config.Server == "" {
