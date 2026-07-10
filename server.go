@@ -34,6 +34,11 @@ func (server *UdpServer) Stats() DeliveryStatsSnapshot {
 	return server.stats.Snapshot()
 }
 
+// WriteResults returns completed application-message write attempts until the server stops.
+func (server *UdpServer) WriteResults() <-chan WriteResult {
+	return server.writeResults
+}
+
 // Close stops a retry server and waits for its retry and network I/O loops to exit.
 func (server *RetryUdpServer) Close() error {
 	server.cancel()

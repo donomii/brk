@@ -2,21 +2,25 @@
 
 ## Summary
 
-`brk` is a Go library for sending discrete UDP messages. It can run as a plain UDP message router or as a retrying router that resends application messages until an acknowledgement arrives.
+`brk` is a standard-library-only Go package for discrete UDP messages. It provides plain routing, acknowledged retry delivery, receipts, optional shared-key authentication, IPv4/IPv6 endpoints, live-socket STUN discovery, hole punching, and keepalives.
 
 ## Public Behavior
 
-`StartUdpContext` starts a UDP listener on the requested local host and port. Port `0` asks the operating system for an available local port. The returned server exposes `Incoming`, `Outgoing`, `LocalAddress`, `Stats`, `Done`, and `Close`. Startup rejects a nil context or processor. Stopping the listener closes `Incoming` so processors ranging over it can finish. `Close` and `Done` wait for the owned network I/O loops, but not for the application processor.
+`StartUdpContext` starts a UDP listener on the requested local host and port. Port `0` asks the operating system for an available local port. IPv4 remains the default; an explicit IPv6 literal selects IPv6. The returned server exposes `Incoming`, `Outgoing`, `LocalAddress`, `LocalEndpoint`, `WriteResults`, `Stats`, `Done`, and `Close`. Startup rejects a nil context or processor. Stopping the listener closes `Incoming`. `Close` and `Done` wait for owned network I/O loops, but not for the application processor.
 
 `StartUdp` keeps the older blocking API. It starts the same UDP listener and blocks until the server stops.
 
-`StartRetryUdpContext` starts a retrying UDP listener. Application code reads delivered messages from `Incoming` and sends messages through `Outgoing`. Each outgoing application message is assigned a process-wide sequence number, validated, cached, and transmitted as a JSON `UdpMessage`. The starting sequence is randomized on process startup. An `Ack` removes a cached message only when its sequence and source port match the pending target. For literal IP targets, the source IP must also match. Hostname targets cannot be pinned to the resolved IP by the current asynchronous writer. `Close` and `Done` wait for the owned retry and network I/O loops, but not for the application processor.
+`StartRetryUdpContext` starts a retrying UDP listener with a random 128-bit session ID. Application code reads delivered messages from `Incoming`, keeps using `Outgoing` for compatibility, or calls `Send` for a delivery handle. Every retry message receives a random 128-bit message ID and a diagnostic sequence. `Close` and `Done` wait for owned retry and network I/O loops, complete pending delivery handles as canceled, and do not wait for the application processor.
 
 `StartRetryUdp` keeps the older blocking retry API. It uses `DefaultRetryConfig`.
 
 `SendMessage` copies the supplied data, then puts a `UdpMessage` onto an outgoing channel with the copied data, target address, target port, a new sequence number, empty type, and current cache timestamp.
 
-`DiscoverExternalAddress` sends one STUN binding request from a temporary UDP socket and returns the external address from a `XOR-MAPPED-ADDRESS` or `MAPPED-ADDRESS` response. The socket closes before return, so the result does not advertise an existing `UdpServer`. This helper is optional and is not called by server startup.
+`SendMessageTo` validates a `netip.AddrPort` and queues a copied payload. `RetryUdpServer.Send` accepts a `SendRequest`, queues a version-1 message, and returns a `Delivery`. `Delivery.ID` returns the message ID. `Wait`, `Done`, and `Result` expose exactly one terminal `DeliveryResult`.
+
+The package function `DiscoverExternalAddress` uses a temporary UDP socket. `UdpServer.DiscoverExternalAddress` and the retry-server forwarding method use the server's live socket so the returned mapping belongs to the running server. STUN is optional and never runs during startup.
+
+`PunchPeer` sends marked STUN binding requests from the live socket until a peer replies or the configured attempts end. `KeepPeerAlive` immediately sends a marked STUN binding indication and repeats at the configured interval until its context or server ends.
 
 ## Public Types
 
@@ -28,6 +32,11 @@
 - `Sequence`: message sequence used for retry acknowledgements.
 - `Type`: empty for application messages and `Ack` for acknowledgement messages.
 - `Cached`: timestamp used by retry logic.
+- `Version`: `0` for legacy packets and `1` for the versioned wire format.
+- `SessionID`: 32 lowercase hexadecimal characters identifying the sending retry server.
+- `MessageID`: 32 lowercase hexadecimal characters identifying the message.
+- `Deadline`: sender-local terminal deadline; it is not transmitted.
+- `Signature`: unpadded base64url HMAC for version-1 packets; it is not delivered as application data.
 
 `RetryConfig`
 
@@ -36,6 +45,33 @@
 - `AckTimeout`: message age required before retransmission. Default: `2s`.
 - `MaxAttempts`: maximum retransmission attempts. Default: `0`, meaning retry until acknowledged.
 - `DuplicateTTL`: how long received source-endpoint and sequence combinations stay in the duplicate cache. Default: `5m`.
+- `MaxPending`: maximum pending messages. Default: `2000`.
+- `BackoffMultiplier`: exponential retry multiplier, at least `1`. Default: `2`.
+- `MaxRetryDelay`: upper bound for retry delay. Default: `30s`.
+- `JitterFraction`: deterministic variation in `[0,1)`. Default: `0.20`.
+- `DisableJitter`: makes retry delays exact when true. Default: `false`.
+- `DeliveryTimeout`: default sender-local deadline. Default: `1m`.
+- `DisableDeliveryTimeout`: removes the default deadline when true. Default: `false`.
+- `AuthenticationKey`: optional shared HMAC-SHA256 key. Empty disables authentication; configured keys contain at least 32 bytes.
+
+`SendRequest`
+
+- `Data`: payload copied before queueing.
+- `Target`: validated, normalized `netip.AddrPort` in the same address family as the server.
+- `Deadline`: optional absolute deadline. Zero uses `RetryConfig.DeliveryTimeout`.
+
+`DeliveryResult`
+
+- `SessionID`, `MessageID`, and `Target`: delivery identity and target.
+- `Status`: `acknowledged`, `dropped`, `failed`, `expired`, `rejected`, or `canceled`.
+- `Reason`: `acknowledgement`, `deadline`, `max_attempts`, `write_failure`, `pending_limit`, `invalid_message`, or `server_shutdown`.
+- `Attempts`: dispatched UDP writes including the initial write.
+- `Latency`: terminal time minus accepted time.
+- `WriteError`: latest exact resolution or write error, including an earlier error followed by a later successful write.
+
+`PunchConfig` defaults to 8 attempts and a `250ms` interval. `PunchResult` reports the peer, the address it observed, successful attempt number, and round-trip time.
+
+`KeepaliveConfig.Interval` defaults to `20s`.
 
 `STUNConfig`
 
@@ -49,57 +85,95 @@
 - `Acked`: acknowledgement packets that matched and removed pending messages.
 - `Retried`: application messages retransmitted.
 - `Duplicates`: inbound duplicate application messages suppressed.
-- `FailedWrites`: outbound messages rejected during validation or failed during a UDP write.
-- `Dropped`: cached messages removed after `MaxAttempts`.
+- `FailedWrites`: application UDP writes that failed.
+- `Dropped`: messages removed after their attempt limit or final failed write.
+- `Expired`: messages removed at their deadline.
+- `Rejected`: messages rejected before entering the pending cache.
+- `AuthenticationFailures`: inbound retry packets rejected by HMAC policy or verification.
+- `InvalidPackets`: inbound retry packets rejected by protocol validation.
 
 ## Packet Format
 
-Every packet is JSON encoded as `UdpMessage`.
+Encoded packets contain at most 32,768 bytes. The receive path reads one extra byte and rejects oversized datagrams before JSON decoding.
 
-The maximum encoded JSON packet size is 32,768 bytes. Larger outgoing messages fail before the network write. The receive path reads one extra byte so oversized datagrams are rejected explicitly instead of being decoded from truncated JSON.
-
-Application message:
+Legacy version 0 retains the original `UdpMessage` JSON object:
 
 ```json
 {"Data":"base64 bytes","Address":"target or source","Port":1234,"Sequence":3,"Type":"","Cached":"timestamp"}
 ```
 
-Acknowledgement message:
+Version 1 data packet:
 
 ```json
-{"Data":"","Address":"target or source","Port":1234,"Sequence":3,"Type":"Ack","Cached":"timestamp"}
+{"v":1,"kind":"data","sid":"32 lowercase hex characters","mid":"32 lowercase hex characters","seq":3,"data":"base64 bytes","auth":"optional unpadded base64url HMAC"}
 ```
 
-Receivers replace `Address` and `Port` with the actual UDP source address before delivering the message to application code.
+Version 1 acknowledgement:
+
+```json
+{"v":1,"kind":"ack","sid":"original sender session","mid":"original message ID","seq":3,"auth":"optional unpadded base64url HMAC"}
+```
+
+Version 1 decoding rejects unknown fields, trailing JSON, unsupported versions, malformed IDs, unknown kinds, and acknowledgement payloads. `Address`, `Port`, `Cached`, and `Deadline` are not transmitted in version 1. The receiver fills `Address` and `Port` from the normalized UDP source endpoint.
+
+When authentication is enabled, HMAC-SHA256 covers the compact fixed-order version, kind, session ID, message ID, sequence, and data object with `auth` omitted. Empty keys send and accept only unsigned packets. Configured keys reject unsigned packets and every legacy packet. Servers without a key reject signed packets. Comparison is constant-time. Keys never appear in errors or logs.
 
 ## Retry Algorithm
 
 When application code queues an outgoing message:
 
-1. Assign a fresh sequence number.
-2. Validate the target port and encoded packet size. Record a failed write and stop handling an invalid message.
-3. Store a valid message in the retry cache with zero retransmission attempts.
-4. Send the message to the network outgoing channel.
+1. Copy payload data and assign version, session ID, message ID, sequence, accepted time, and deadline.
+2. Validate deadline, target, IDs, authentication, encoded size, and pending capacity.
+3. Reject invalid or over-capacity messages with one terminal receipt and increment `Rejected`.
+4. Store a valid message atomically with attempt count 1 and write-in-flight state.
+5. Dispatch the initial write through the network outgoing queue.
+
+The UDP writer returns a `WriteResult` containing the session ID, message ID, sequence, normalized target, completion time, exact error, and whether the error is permanent. A successful or retriable failed write clears in-flight state and schedules one retry time. A permanent error, or a failed final attempt, removes the entry and completes it as `failed/write_failure`.
+
+After completed attempt count `attempts`, retry delay is:
+
+```text
+base delay = min(MaxRetryDelay, AckTimeout × BackoffMultiplier^(attempts-1))
+jitter factor = 1 - JitterFraction + 2 × JitterFraction × deterministic fraction(message ID, attempts)
+retry delay = min(MaxRetryDelay, base delay × jitter factor)
+```
+
+The jitter fraction is derived once from SHA-256 of the message ID and attempt count, so repeated cache scans cannot change a scheduled time. `DisableJitter` makes the factor `1`.
 
 On every retry interval:
 
-1. Read retry cache keys in sequence order.
-2. For each cached message older than `AckTimeout`, check `MaxAttempts`.
-3. If `MaxAttempts` is nonzero and the message has already reached it, remove the message and increment `Dropped`.
-4. Otherwise update the cached timestamp, increment attempts, send the message again, and increment `Retried`.
+1. Read pending keys in sequence order.
+2. Expire entries at their deadline.
+3. Ignore entries with a write in flight or a future retry time.
+4. Remove entries that exhausted `1 + MaxAttempts` dispatched writes. A final successful write becomes `dropped/max_attempts`; a final failed write becomes `failed/write_failure`.
+5. Otherwise increment attempts, mark the write in flight, dispatch it, and increment `Retried`.
 
 When a non-acknowledgement message arrives:
 
 1. Remove expired duplicate-cache entries.
-2. Check the source address, source port, and sequence against the duplicate cache.
+2. Check source address, source port, sequence, session ID, and message ID against the duplicate cache.
 3. If the message is new, place it on the application queue and then send its acknowledgement.
 4. If the message is a duplicate, send its acknowledgement immediately and increment `Duplicates`.
 
 When an acknowledgement arrives:
 
-1. Check that the sequence is pending and the acknowledgement source matches the cached target.
+1. Check that sequence, version, session ID, message ID, and source endpoint match the pending target.
 2. Remove the matching sequence from the retry cache.
-3. Increment `Acked` only when a cached message was removed.
+3. Complete the delivery once as `acknowledged/acknowledgement` and increment `Acked`.
+
+Late acknowledgements and write results after terminal removal are ignored. Server shutdown removes all remaining entries and completes their handles as `canceled/server_shutdown`.
+
+## Endpoints and NAT Control
+
+Endpoints are normalized with IPv4-mapped IPv6 addresses converted to IPv4. `UdpMessage.Endpoint`, `ExternalAddress.Endpoint`, `LocalEndpoint`, `SendMessageTo`, and `Send` use `netip.AddrPort`. A server bound to an explicit IPv6 literal uses one IPv6 socket; every other existing host form retains IPv4 behavior. Destination and local address families must match.
+
+The UDP reader is the only socket reader. It classifies STUN by message-type high bits and the `0x2112A442` cookie before JSON decoding. STUN length must be divisible by four and exactly match the datagram. STUN traffic does not enter application queues or application delivery counters.
+
+Live STUN discovery serializes exchanges per server, resolves a family-compatible STUN endpoint in the caller's control path, writes from the live socket, and accepts only a response with the requested transaction and source endpoint. Caller cancellation, timeout, or server closure ends the exchange.
+
+Hole punching sends binding requests carrying a `SOFTWARE=brk` attribute. A running server responds only to marked requests with a binding success containing the observed source as `XOR-MAPPED-ADDRESS`. `PunchPeer` repeats with a new transaction per attempt and returns the first valid result. Both peers exchange candidates out of band. Symmetric NAT and relay traversal are not guaranteed.
+
+Keepalives are marked STUN binding indications. `KeepPeerAlive` sends immediately, repeats at `KeepaliveConfig.Interval`, solicits no response, and returns when its context or server ends.
 
 ## Demos
 
@@ -107,8 +181,19 @@ When an acknowledgement arrives:
 
 `cmd/brk-lossy-demo` starts a retrying sender and a raw receiver. The receiver skips the first acknowledgement, accepts the retry, then acknowledges it.
 
+`cmd/brk-nat-demo` starts two localhost servers, punches one peer, runs a short keepalive loop, and prints endpoints and timing. `nat-demo.sh` launches it without flags.
+
+## Expected Files
+
+- `build.sh`, `run.sh`, `test.sh`, `demo.sh`, `nat-demo.sh`, and `install.sh`: no-configuration launchers.
+- `cmd/brk-demo`, `cmd/brk-lossy-demo`, and `cmd/brk-nat-demo`: runnable demonstrations.
+- `README.md`: installation, quickstart, API configuration, NAT behavior, and limitations.
+- `CHANGELOG.md`: tagged release behavior.
+- `.github/workflows/test.yml`: Go-version matrix, vet, tests, race tests, coverage generation, and upload.
+- `CONTRIBUTING.md`, `SECURITY.md`, issue templates, and pull-request template: repository contribution and reporting behavior.
+
 ## Release Notes
 
-First release tag to create after merging these changes: `v0.1.0`.
+The first stable project snapshot is tagged `v0.1.0` and described in `RELEASE_NOTES.md`.
 
 Use later `v0.x` tags for compatible improvements. Reserve `v1.0.0` for a stable packet/API contract.

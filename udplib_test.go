@@ -32,6 +32,24 @@ func TestResolveRetryConfigUsesDefaults(t *testing.T) {
 	if config.DuplicateTTL != 5*time.Minute {
 		t.Fatalf("duplicate TTL mismatch: expected %v, received %v", 5*time.Minute, config.DuplicateTTL)
 	}
+	if config.MaxPending != Qlength {
+		t.Fatalf("max pending mismatch: expected %d, received %d", Qlength, config.MaxPending)
+	}
+	if config.BackoffMultiplier != defaultBackoffMultiplier {
+		t.Fatalf("backoff multiplier mismatch: expected %v, received %v", defaultBackoffMultiplier, config.BackoffMultiplier)
+	}
+	if config.MaxRetryDelay != 30*time.Second {
+		t.Fatalf("max retry delay mismatch: expected %v, received %v", 30*time.Second, config.MaxRetryDelay)
+	}
+	if config.JitterFraction != defaultJitterFraction {
+		t.Fatalf("jitter fraction mismatch: expected %v, received %v", defaultJitterFraction, config.JitterFraction)
+	}
+	if config.DeliveryTimeout != time.Minute {
+		t.Fatalf("delivery timeout mismatch: expected %v, received %v", time.Minute, config.DeliveryTimeout)
+	}
+	if len(config.AuthenticationKey) != 0 {
+		t.Fatalf("authentication key mismatch: expected empty key, received %d bytes", len(config.AuthenticationKey))
+	}
 }
 
 func TestResolveRetryConfigRejectsInvalidValues(t *testing.T) {
@@ -58,6 +76,36 @@ func TestResolveRetryConfigRejectsInvalidValues(t *testing.T) {
 	_, err = ResolveRetryConfig(RetryConfig{DuplicateTTL: -1})
 	if err == nil {
 		t.Fatalf("negative duplicate TTL mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxPending: -1})
+	if err == nil {
+		t.Fatalf("negative max pending mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{BackoffMultiplier: 0.5})
+	if err == nil {
+		t.Fatalf("small backoff multiplier mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxRetryDelay: -1})
+	if err == nil {
+		t.Fatalf("negative max retry delay mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{JitterFraction: 1})
+	if err == nil {
+		t.Fatalf("large jitter fraction mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{DeliveryTimeout: -1})
+	if err == nil {
+		t.Fatalf("negative delivery timeout mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{AuthenticationKey: []byte("short")})
+	if err == nil {
+		t.Fatalf("short authentication key mismatch: expected error, received nil")
 	}
 }
 
@@ -454,20 +502,20 @@ func TestHandleRetryIncomingRejectsWrongPeerAcknowledgement(t *testing.T) {
 func TestAcknowledgementDoesNotRestorePreparedRetry(t *testing.T) {
 	now := time.Now()
 	cache := map[int]retryCacheEntry{
-		55: {Message: UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Cached: now.Add(-3 * time.Second)}},
+		55: {Message: UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Cached: now.Add(-3 * time.Second)}, Attempts: 1},
 	}
 	cacheLock := sync.Mutex{}
-	message, _, retry, dropped := prepareExpiredMessage(cache, &cacheLock, 55, now, DefaultRetryConfig())
-	if !retry || dropped {
-		t.Fatalf("prepared retry mismatch: expected retry=true and dropped=false, received retry=%v dropped=%v", retry, dropped)
+	action := prepareRetryAction(cache, &cacheLock, 55, now, DefaultRetryConfig())
+	if !action.Send || action.Terminal {
+		t.Fatalf("prepared retry mismatch: expected send=true and terminal=false, received send=%v terminal=%v", action.Send, action.Terminal)
 	}
 
-	removed := removeAcknowledgedMessage(UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, cache, &cacheLock)
+	_, removed := removeAcknowledgedMessage(UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, cache, &cacheLock)
 	if !removed {
 		t.Fatalf("prepared retry acknowledgement mismatch: expected cached sequence %d to be removed", 55)
 	}
 	netoutgoing := make(chan UdpMessage, 1)
-	netoutgoing <- message
+	netoutgoing <- action.Entry.Message
 
 	cacheLock.Lock()
 	_, exists := cache[55]
@@ -492,8 +540,8 @@ func TestRememberIncomingMessageExpiresOldEntries(t *testing.T) {
 func TestRetransmitExpiredMessages(t *testing.T) {
 	now := time.Now()
 	cache := map[int]retryCacheEntry{
-		10: {Message: UdpMessage{Address: "127.0.0.1", Port: 1200, Sequence: 10, Cached: now.Add(-3 * time.Second)}},
-		11: {Message: UdpMessage{Address: "127.0.0.1", Port: 1201, Sequence: 11, Cached: now}},
+		10: {Message: UdpMessage{Address: "127.0.0.1", Port: 1200, Sequence: 10, Cached: now.Add(-3 * time.Second)}, Attempts: 1},
+		11: {Message: UdpMessage{Address: "127.0.0.1", Port: 1201, Sequence: 11, Cached: now}, Attempts: 1},
 	}
 	cacheLock := sync.Mutex{}
 	netoutgoing := make(chan UdpMessage, 1)
@@ -516,8 +564,8 @@ func TestRetransmitExpiredMessages(t *testing.T) {
 	if !cached.Message.Cached.Equal(now) {
 		t.Fatalf("cache timestamp mismatch: expected %v, received %v", now, cached.Message.Cached)
 	}
-	if cached.Attempts != 1 {
-		t.Fatalf("retry attempts mismatch: expected %d, received %d", 1, cached.Attempts)
+	if cached.Attempts != 2 {
+		t.Fatalf("retry attempts mismatch: expected %d, received %d", 2, cached.Attempts)
 	}
 	if stats.Snapshot().Retried != 1 {
 		t.Fatalf("retry stats mismatch: expected %d, received %d", 1, stats.Snapshot().Retried)
@@ -533,7 +581,7 @@ func TestRetransmitExpiredMessages(t *testing.T) {
 func TestRetransmitExpiredMessagesDropsAfterMaxAttempts(t *testing.T) {
 	now := time.Now()
 	cache := map[int]retryCacheEntry{
-		10: {Message: UdpMessage{Address: "127.0.0.1", Port: 1200, Sequence: 10, Cached: now.Add(-3 * time.Second)}, Attempts: 1},
+		10: {Message: UdpMessage{Address: "127.0.0.1", Port: 1200, Sequence: 10, Cached: now.Add(-3 * time.Second)}, Attempts: 2},
 	}
 	cacheLock := sync.Mutex{}
 	netoutgoing := make(chan UdpMessage, 1)
@@ -557,14 +605,22 @@ func TestRetransmitExpiredMessagesDropsAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestQueueOutgoingMessageRejectsOversizedPacketWithoutCaching(t *testing.T) {
+func TestQueueOutgoingRequestRejectsOversizedPacketWithoutCaching(t *testing.T) {
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	netoutgoing := make(chan UdpMessage, 1)
 	stats := NewDeliveryStats()
 	message := UdpMessage{Data: bytes.Repeat([]byte("x"), maxPacketSize), Address: "127.0.0.1", Port: 9000}
 
-	handled := queueOutgoingMessage(context.Background(), message, cache, &cacheLock, netoutgoing, stats)
+	config, err := ResolveRetryConfig(RetryConfig{})
+	if err != nil {
+		t.Fatalf("resolve retry config failed: expected nil error, received %v", err)
+	}
+	sessionID, err := newSessionID()
+	if err != nil {
+		t.Fatalf("create session id failed: expected nil error, received %v", err)
+	}
+	handled := queueOutgoingRequest(context.Background(), config, sessionID, outboundRequest{Message: message}, cache, &cacheLock, netoutgoing, stats)
 	if !handled {
 		t.Fatalf("oversized retry message handling mismatch: expected true, received false")
 	}
@@ -574,8 +630,8 @@ func TestQueueOutgoingMessageRejectsOversizedPacketWithoutCaching(t *testing.T) 
 	if len(netoutgoing) != 0 {
 		t.Fatalf("oversized network queue mismatch: expected %d messages, received %d", 0, len(netoutgoing))
 	}
-	if stats.Snapshot().FailedWrites != 1 {
-		t.Fatalf("oversized retry failure stats mismatch: expected %d, received %d", 1, stats.Snapshot().FailedWrites)
+	if stats.Snapshot().Rejected != 1 {
+		t.Fatalf("oversized retry rejection stats mismatch: expected %d, received %d", 1, stats.Snapshot().Rejected)
 	}
 }
 
@@ -587,7 +643,7 @@ func TestStartRetryUdpContextRetriesUntilAcked(t *testing.T) {
 			count = count + 1
 			seenByReceiver <- message
 			if count >= 2 {
-				outgoing <- UdpMessage{Address: message.Address, Port: message.Port, Sequence: message.Sequence, Type: ackType, Cached: time.Now()}
+				outgoing <- NewAcknowledgement(message)
 				return
 			}
 		}

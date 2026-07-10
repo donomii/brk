@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a useful addition to brk
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What networking problem or workflow should brk handle better?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the public behavior, API, and expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other approaches.
+  - type: checkboxes
+    id: compatibility
+    attributes:
+      label: Compatibility
+      description: Confirm the areas considered by the proposal.
+      options:
+        - label: I considered version 0 and version 1 packet compatibility.
+        - label: I considered IPv4 and IPv6 behavior.
+        - label: I considered the 32,768-byte encoded-packet limit.

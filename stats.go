@@ -53,3 +53,27 @@ func (stats *DeliveryStats) addDropped() {
 	defer stats.lock.Unlock()
 	stats.snapshot.Dropped = stats.snapshot.Dropped + 1
 }
+
+func (stats *DeliveryStats) addExpired() {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.Expired = stats.snapshot.Expired + 1
+}
+
+func (stats *DeliveryStats) addRejected() {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.Rejected = stats.snapshot.Rejected + 1
+}
+
+func (stats *DeliveryStats) addAuthenticationFailure() {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.AuthenticationFailures = stats.snapshot.AuthenticationFailures + 1
+}
+
+func (stats *DeliveryStats) addInvalidPacket() {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.InvalidPackets = stats.snapshot.InvalidPackets + 1
+}

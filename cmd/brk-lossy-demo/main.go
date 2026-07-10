@@ -23,7 +23,7 @@ func main() {
 			if seen[message.Sequence] == 1 {
 				fmt.Printf("receiver skipped first acknowledgement for sequence %d\n", message.Sequence)
 			} else {
-				outgoing <- brk.UdpMessage{Address: message.Address, Port: message.Port, Sequence: message.Sequence, Type: "Ack", Cached: time.Now()}
+				outgoing <- brk.NewAcknowledgement(message)
 				delivered <- message
 				return
 			}

@@ -1,0 +1,49 @@
+name: Bug report
+description: Report reproducible incorrect behavior in brk
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve brk. For security issues, use https://github.com/donomii/brk/security/advisories/new instead.
+  - type: input
+    id: version
+    attributes:
+      label: brk version
+      description: Provide a tag or commit SHA.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Paste the output of `go version`.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the received result, expected result, and complete error or log output.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest complete program or exact commands that reproduce the problem.
+    validations:
+      required: true
+  - type: dropdown
+    id: address-family
+    attributes:
+      label: Address family
+      description: Select the endpoint family involved.
+      options:
+        - IPv4
+        - IPv6
+        - Both
+        - Not applicable
+    validations:
+      required: true
