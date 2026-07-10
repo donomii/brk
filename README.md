@@ -153,7 +153,7 @@ fmt.Printf("sent=%d received=%d acked=%d retried=%d duplicates=%d failed=%d drop
 
 ## STUN
 
-STUN is optional and never runs during server startup. The server method uses the live UDP socket, so the returned mapping belongs to that server:
+STUN is optional and doesn't run during server startup. The server method uses the live UDP socket, so the returned mapping belongs to that server:
 
 ```go
 config := brk.DefaultSTUNConfig()
@@ -173,7 +173,7 @@ The package-level `brk.DiscoverExternalAddress(config)` remains for compatibilit
 
 ## Hole punching and keepalives
 
-After peers exchange candidates through an out-of-band rendezvous service, each can punch the other candidate from its live socket:
+After peers exchange connection candidates through an out-of-band rendezvous service, each can punch the other's candidate from its live socket:
 
 ```go
 result, err := server.PunchPeer(ctx, peer, brk.DefaultPunchConfig())

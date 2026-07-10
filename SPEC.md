@@ -18,7 +18,7 @@
 
 `SendMessageTo` validates a `netip.AddrPort` and queues a copied payload. `RetryUdpServer.Send` accepts a `SendRequest`, queues a version-1 message, and returns a `Delivery`. `Delivery.ID` returns the message ID. `Wait`, `Done`, and `Result` expose exactly one terminal `DeliveryResult`.
 
-The package function `DiscoverExternalAddress` uses a temporary UDP socket. `UdpServer.DiscoverExternalAddress` and the retry-server forwarding method use the server's live socket so the returned mapping belongs to the running server. STUN is optional and never runs during startup.
+The package function `DiscoverExternalAddress` uses a temporary UDP socket. `UdpServer.DiscoverExternalAddress` and the retry-server forwarding method use the server's live socket so the returned mapping belongs to the running server. STUN is optional and doesn't run during startup.
 
 `PunchPeer` sends marked STUN binding requests from the live socket until a peer replies or the configured attempts end. `KeepPeerAlive` immediately sends a marked STUN binding indication and repeats at the configured interval until its context or server ends.
 
