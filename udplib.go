@@ -161,8 +161,13 @@ func readUDPMessage(conn *net.UDPConn) (UdpMessage, error) {
 	return decodeUDPMessage(packet, net.UDPAddrFromAddrPort(source))
 }
 
+// packetBuffers recycles receive buffers; readUDPDatagram copies each
+// datagram out before returning the buffer, so pooled memory never escapes.
+var packetBuffers = sync.Pool{New: func() any { return make([]byte, packetReadSize) }}
+
 func readUDPDatagram(conn *net.UDPConn) ([]byte, netip.AddrPort, error) {
-	buffer := make([]byte, packetReadSize)
+	buffer := packetBuffers.Get().([]byte)
+	defer packetBuffers.Put(buffer)
 	n, source, err := conn.ReadFromUDPAddrPort(buffer)
 	if err != nil {
 		return nil, netip.AddrPort{}, fmt.Errorf("read UDP packet: %w", err)

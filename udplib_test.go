@@ -360,7 +360,7 @@ func TestRetryUdpServerStopsWhenNetworkCloses(t *testing.T) {
 }
 
 func TestHandleRetryIncomingAcknowledgesNewMessagesAndDropsDuplicates(t *testing.T) {
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	config := DefaultRetryConfig()
@@ -401,7 +401,7 @@ func TestHandleRetryIncomingAcknowledgesNewMessagesAndDropsDuplicates(t *testing
 }
 
 func TestHandleRetryIncomingKeepsSameSequenceFromDifferentPeers(t *testing.T) {
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	config := DefaultRetryConfig()
@@ -429,7 +429,7 @@ func TestHandleRetryIncomingKeepsSameSequenceFromDifferentPeers(t *testing.T) {
 }
 
 func TestHandleRetryIncomingDoesNotAcknowledgeUndeliveredMessage(t *testing.T) {
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	appincoming := make(chan UdpMessage)
@@ -448,7 +448,7 @@ func TestHandleRetryIncomingDoesNotAcknowledgeUndeliveredMessage(t *testing.T) {
 }
 
 func TestHandleRetryIncomingRemovesAcknowledgedCacheEntry(t *testing.T) {
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{55: {Message: UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55}}}
 	cacheLock := sync.Mutex{}
 	config := DefaultRetryConfig()
@@ -475,7 +475,7 @@ func TestHandleRetryIncomingRemovesAcknowledgedCacheEntry(t *testing.T) {
 }
 
 func TestHandleRetryIncomingRejectsWrongPeerAcknowledgement(t *testing.T) {
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{55: {Message: UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55}}}
 	cacheLock := sync.Mutex{}
 	stats := NewDeliveryStats()
@@ -528,12 +528,39 @@ func TestAcknowledgementDoesNotRestorePreparedRetry(t *testing.T) {
 func TestRememberIncomingMessageExpiresOldEntries(t *testing.T) {
 	now := time.Now()
 	message := UdpMessage{Address: "127.0.0.1", Port: 1000, Sequence: 10}
-	key := receivedMessageKey{Address: message.Address, Port: message.Port, Sequence: message.Sequence}
-	seenCache := map[receivedMessageKey]time.Time{key: now.Add(-2 * time.Second)}
+	seenCache := newReceivedMessageCache()
+
+	if !rememberIncomingMessage(message, seenCache, time.Second, now.Add(-2*time.Second)) {
+		t.Fatalf("first message mismatch: expected new identity to be accepted")
+	}
+	if rememberIncomingMessage(message, seenCache, time.Second, now.Add(-1500*time.Millisecond)) {
+		t.Fatalf("live duplicate mismatch: expected repeat inside TTL to be suppressed")
+	}
 
 	newMessage := rememberIncomingMessage(message, seenCache, time.Second, now)
 	if !newMessage {
 		t.Fatalf("expired duplicate cache mismatch: expected sequence to be accepted after TTL")
+	}
+	if len(seenCache.entries) != 1 || len(seenCache.queue) != 1 {
+		t.Fatalf("pruned cache size mismatch: expected 1 entry and 1 queued record, received %d and %d", len(seenCache.entries), len(seenCache.queue))
+	}
+}
+
+func TestReceivedMessageCachePruneKeepsReaddedIdentity(t *testing.T) {
+	now := time.Now()
+	key := receivedMessageKey{Address: "127.0.0.1", Port: 1000, Sequence: 10}
+	seenCache := newReceivedMessageCache()
+
+	if !seenCache.remember(key, time.Second, now.Add(-3*time.Second)) {
+		t.Fatalf("first remember mismatch: expected new identity to be accepted")
+	}
+	if !seenCache.remember(key, time.Second, now.Add(-500*time.Millisecond)) {
+		t.Fatalf("re-added identity mismatch: expected identity to be accepted after its record expired")
+	}
+
+	seenCache.prune(time.Second, now)
+	if _, exists := seenCache.entries[key]; !exists {
+		t.Fatalf("prune mismatch: expected live re-added identity to survive pruning of its expired record")
 	}
 }
 

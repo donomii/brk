@@ -29,7 +29,7 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 		return nil, err
 	}
 
-	seenCache := map[receivedMessageKey]time.Time{}
+	seenCache := newReceivedMessageCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	appincoming := make(chan UdpMessage, resolved.QueueLength)
@@ -101,7 +101,7 @@ func retryCachedMessages(ctx context.Context, config RetryConfig, cache map[int]
 	}
 }
 
-func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache map[receivedMessageKey]time.Time, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
+func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *receivedMessageCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
 	defer close(appincoming)
 	for {
 		select {
@@ -345,7 +345,7 @@ func finishPendingDeliveries(cache map[int]retryCacheEntry, cacheLock *sync.Mute
 	}
 }
 
-func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache map[receivedMessageKey]time.Time, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
+func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *receivedMessageCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
 	if message.Type == ackType {
 		entry, removed := removeAcknowledgedMessage(message, cache, cacheLock)
 		if removed {
@@ -412,23 +412,51 @@ func acknowledgementMatchesTarget(acknowledgement, outgoing UdpMessage) bool {
 	return sourceIP != nil && targetIP.Equal(sourceIP)
 }
 
-func rememberIncomingMessage(message UdpMessage, seenCache map[receivedMessageKey]time.Time, duplicateTTL time.Duration, now time.Time) bool {
-	pruneSeenCache(seenCache, duplicateTTL, now)
+func rememberIncomingMessage(message UdpMessage, seenCache *receivedMessageCache, duplicateTTL time.Duration, now time.Time) bool {
 	key := receivedMessageKey{Address: message.Address, Port: message.Port, Sequence: message.Sequence, SessionID: message.SessionID, MessageID: message.MessageID}
-	_, exists := seenCache[key]
-	if exists {
-		return false
-	} else {
-		seenCache[key] = now
-		return true
-	}
+	return seenCache.remember(key, duplicateTTL, now)
 }
 
-func pruneSeenCache(seenCache map[receivedMessageKey]time.Time, duplicateTTL time.Duration, now time.Time) {
-	for key, seenAt := range seenCache {
-		if now.Sub(seenAt) > duplicateTTL {
-			delete(seenCache, key)
+// receivedMessageCache tracks recently delivered message identities. Entries
+// share one TTL, so insertion order is expiry order and pruning pops expired
+// queue heads instead of scanning every cached identity per inbound message.
+type receivedMessageCache struct {
+	entries map[receivedMessageKey]time.Time
+	queue   []receivedMessageRecord
+}
+
+type receivedMessageRecord struct {
+	key    receivedMessageKey
+	seenAt time.Time
+}
+
+func newReceivedMessageCache() *receivedMessageCache {
+	return &receivedMessageCache{entries: map[receivedMessageKey]time.Time{}}
+}
+
+func (cache *receivedMessageCache) remember(key receivedMessageKey, duplicateTTL time.Duration, now time.Time) bool {
+	cache.prune(duplicateTTL, now)
+	_, exists := cache.entries[key]
+	if exists {
+		return false
+	}
+	cache.entries[key] = now
+	cache.queue = append(cache.queue, receivedMessageRecord{key: key, seenAt: now})
+	return true
+}
+
+func (cache *receivedMessageCache) prune(duplicateTTL time.Duration, now time.Time) {
+	for len(cache.queue) > 0 && now.Sub(cache.queue[0].seenAt) > duplicateTTL {
+		record := cache.queue[0]
+		cache.queue = cache.queue[1:]
+		// Defensive: delete only the map entry this exact record created, so a
+		// later re-add of the same key can never be removed by a stale record.
+		if seenAt, exists := cache.entries[record.key]; exists && seenAt.Equal(record.seenAt) {
+			delete(cache.entries, record.key)
 		}
+	}
+	if len(cache.queue) == 0 {
+		cache.queue = nil
 	}
 }
 

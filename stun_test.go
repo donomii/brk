@@ -181,6 +181,60 @@ func TestParseSTUNBindingResponseRejectsMalformedPackets(t *testing.T) {
 	}
 }
 
+func TestParseSTUNBindingResponseXORIPv6(t *testing.T) {
+	transactionID := [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	ip := net.ParseIP("2001:db8::9").To16()
+	port := 54321
+
+	mask := make([]byte, 16)
+	binary.BigEndian.PutUint32(mask[0:4], stunMagicCookie)
+	copy(mask[4:16], transactionID[:])
+	value := make([]byte, 20)
+	value[1] = 0x02
+	binary.BigEndian.PutUint16(value[2:4], uint16(port)^uint16(stunMagicCookie>>16))
+	for index := 0; index < 16; index++ {
+		value[4+index] = ip[index] ^ mask[index]
+	}
+	packet := makeSTUNResponse(transactionID, append([]byte{0x00, 0x20, 0x00, 20}, value...))
+
+	address, err := parseSTUNBindingResponse(packet, transactionID, "stun.example:3478")
+	if err != nil {
+		t.Fatalf("parse STUN response failed: expected nil error, received %v", err)
+	}
+	if address.IP != "2001:db8::9" || address.Port != port || address.Family != "IPv6" {
+		t.Fatalf("STUN IPv6 address mismatch: expected 2001:db8::9:%d IPv6, received %+v", port, address)
+	}
+}
+
+func TestParseSTUNBindingResponseSkipsUnknownAttributes(t *testing.T) {
+	transactionID := [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	software := []byte("hello")
+	attributes := make([]byte, 0, 24)
+	attributes = append(attributes, 0x80, 0x22, 0x00, byte(len(software)))
+	attributes = append(attributes, software...)
+	attributes = append(attributes, 0, 0, 0)
+	attributes = append(attributes, makeSTUNXORIPv4Response(transactionID, "203.0.113.9", 54321)[20:]...)
+	packet := makeSTUNResponse(transactionID, attributes)
+
+	address, err := parseSTUNBindingResponse(packet, transactionID, "stun.example:3478")
+	if err != nil {
+		t.Fatalf("parse STUN response failed: expected nil error, received %v", err)
+	}
+	if address.IP != "203.0.113.9" || address.Port != 54321 {
+		t.Fatalf("STUN address mismatch after odd-length attribute skip: expected 203.0.113.9:54321, received %+v", address)
+	}
+}
+
+func makeSTUNResponse(transactionID [12]byte, attributes []byte) []byte {
+	packet := make([]byte, 20+len(attributes))
+	binary.BigEndian.PutUint16(packet[0:2], 0x0101)
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(attributes)))
+	binary.BigEndian.PutUint32(packet[4:8], stunMagicCookie)
+	copy(packet[8:20], transactionID[:])
+	copy(packet[20:], attributes)
+	return packet
+}
+
 func makeSTUNXORIPv4Response(transactionID [12]byte, ip string, port int) []byte {
 	parsedIP := net.ParseIP(ip).To4()
 	packet := make([]byte, 32)
