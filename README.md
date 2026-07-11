@@ -10,7 +10,7 @@ Message-level reliable UDP for Go.
 
 - Delivery acknowledgements, receipts, duplicate suppression, deadlines, and bounded pending queues.
 - Exponential retry backoff with deterministic jitter and configurable limits.
-- Versioned packets with random session/message IDs and optional HMAC-SHA256 authentication.
+- Versioned JSON and binary packet formats with random session/message IDs and optional HMAC-SHA256 authentication.
 - IPv4 and IPv6 endpoints through `netip.AddrPort`.
 - STUN discovery through the live server socket, peer hole punching, and keepalives.
 
@@ -125,6 +125,7 @@ config.DisableJitter = false
 config.DeliveryTimeout = time.Minute
 config.DisableDeliveryTimeout = false
 config.AuthenticationKey = nil
+config.WireVersion = brk.ProtocolV1
 ```
 
 - `QueueLength`: channel buffer size for incoming and outgoing messages.
@@ -140,8 +141,11 @@ config.AuthenticationKey = nil
 - `DeliveryTimeout`: default per-message deadline. Default: `1m`.
 - `DisableDeliveryTimeout`: set to `true` for no default deadline. Default: `false`.
 - `AuthenticationKey`: optional shared HMAC-SHA256 key. Empty disables authentication; configured keys require at least 32 bytes.
+- `WireVersion`: outgoing packet format, `brk.ProtocolV1` (JSON, default) or `brk.ProtocolV2` (binary). Inbound packets of every version are always accepted.
 
 With an authentication key, unsigned packets, legacy packets, altered packets, and packets signed with a different key are rejected. Authentication protects integrity and peer possession of the shared key; it does not encrypt payloads.
+
+Set `config.WireVersion = brk.ProtocolV2` to send the binary wire format: a 44-byte header and raw payload replace JSON and base64, leaving more room for application data under the path MTU. Receivers detect each inbound packet's format, so mixed-version peers interoperate, and acknowledgements answer in the format of the message they acknowledge.
 
 ## Stats
 

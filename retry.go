@@ -122,15 +122,15 @@ func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *re
 }
 
 func validateRetryPacket(message UdpMessage, config RetryConfig, stats *DeliveryStats) bool {
-	if message.Version == ProtocolV1 {
-		err := validateV1Message(message)
+	if message.Version == ProtocolV1 || message.Version == ProtocolV2 {
+		err := validateVersionedMessage(message)
 		if err != nil {
 			stats.addInvalidPacket()
 			logInvalidRetryPacket(message, err)
 			return false
 		}
 	} else if message.Version != ProtocolLegacy {
-		err := fmt.Errorf("expected protocol version 0 or 1, received %d", message.Version)
+		err := fmt.Errorf("expected protocol version 0, 1, or 2, received %d", message.Version)
 		stats.addInvalidPacket()
 		logInvalidRetryPacket(message, err)
 		return false
@@ -398,7 +398,7 @@ func removeAcknowledgedMessage(message UdpMessage, cache map[int]retryCacheEntry
 }
 
 func acknowledgementMatchesTarget(acknowledgement, outgoing UdpMessage) bool {
-	if outgoing.Version == ProtocolV1 && (acknowledgement.Version != ProtocolV1 || acknowledgement.SessionID != outgoing.SessionID || acknowledgement.MessageID != outgoing.MessageID) {
+	if outgoing.Version != ProtocolLegacy && (acknowledgement.Version != outgoing.Version || acknowledgement.SessionID != outgoing.SessionID || acknowledgement.MessageID != outgoing.MessageID) {
 		return false
 	}
 	if acknowledgement.Port != outgoing.Port {
@@ -489,7 +489,7 @@ func queueOutgoingRequest(ctx context.Context, config RetryConfig, sessionID Ses
 }
 
 func prepareOutgoingMessage(message UdpMessage, config RetryConfig, sessionID SessionID, now time.Time) (UdpMessage, error) {
-	message.Version = ProtocolV1
+	message.Version = config.WireVersion
 	message.SessionID = sessionID
 	message.Sequence = getSequence()
 	message.Type = ""

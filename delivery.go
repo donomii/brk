@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// Send validates and queues a version 1 retry message and returns its delivery handle.
+// Send validates and queues a retry message in the configured wire format and
+// returns its delivery handle.
 func (server *RetryUdpServer) Send(ctx context.Context, request SendRequest) (*Delivery, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("send retry UDP message failed: expected non-nil context")
@@ -25,7 +26,7 @@ func (server *RetryUdpServer) Send(ctx context.Context, request SendRequest) (*D
 		return nil, err
 	}
 	delivery := newDelivery(messageID)
-	message := UdpMessage{Data: append([]byte(nil), request.Data...), Address: target.Addr().String(), Port: int(target.Port()), Version: ProtocolV1, SessionID: server.sessionID, MessageID: messageID, Deadline: deadline}
+	message := UdpMessage{Data: append([]byte(nil), request.Data...), Address: target.Addr().String(), Port: int(target.Port()), Version: server.Config.WireVersion, SessionID: server.sessionID, MessageID: messageID, Deadline: deadline}
 	select {
 	case server.requests <- outboundRequest{Message: message, Delivery: delivery}:
 		return delivery, nil

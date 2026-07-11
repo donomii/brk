@@ -24,6 +24,7 @@ func DefaultRetryConfig() RetryConfig {
 		MaxRetryDelay:     30 * time.Second,
 		JitterFraction:    defaultJitterFraction,
 		DeliveryTimeout:   time.Minute,
+		WireVersion:       ProtocolV1,
 	}
 }
 
@@ -96,6 +97,12 @@ func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 		return RetryConfig{}, fmt.Errorf("retry config invalid: expected authentication key to be empty or at least %d bytes, received %d bytes", minimumSharedKeyBytes, len(config.AuthenticationKey))
 	}
 	config.AuthenticationKey = append([]byte(nil), config.AuthenticationKey...)
+
+	if config.WireVersion == ProtocolLegacy {
+		config.WireVersion = defaults.WireVersion
+	} else if config.WireVersion != ProtocolV1 && config.WireVersion != ProtocolV2 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected wire version %d or %d, received %d", ProtocolV1, ProtocolV2, config.WireVersion)
+	}
 
 	return config, nil
 }

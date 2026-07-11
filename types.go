@@ -27,10 +27,17 @@ type SessionID string
 type MessageID string
 
 const (
-	// ProtocolLegacy is the original UdpMessage JSON packet format.
+	// ProtocolLegacy is the original UdpMessage JSON packet format. It is
+	// accepted inbound only; outgoing retry traffic always uses a versioned
+	// format.
 	ProtocolLegacy ProtocolVersion = 0
-	// ProtocolV1 is the compact, versioned packet format with session and message IDs.
+	// ProtocolV1 is the compact, versioned JSON packet format with session
+	// and message IDs.
 	ProtocolV1 ProtocolVersion = 1
+	// ProtocolV2 is the binary packet format. It carries the same fields as
+	// ProtocolV1 in a 44-byte header plus raw payload, leaving more room for
+	// application data under the path MTU.
+	ProtocolV2 ProtocolVersion = 2
 )
 
 // DeliveryStatus is the terminal state of a Delivery.
@@ -110,8 +117,10 @@ type RetryConfig struct {
 	DeliveryTimeout time.Duration
 	// DisableDeliveryTimeout removes the default delivery deadline.
 	DisableDeliveryTimeout bool
-	// AuthenticationKey optionally signs version 1 packets with HMAC-SHA256 and must contain at least 32 bytes.
+	// AuthenticationKey optionally signs versioned packets with HMAC-SHA256 and must contain at least 32 bytes.
 	AuthenticationKey []byte
+	// WireVersion selects the outgoing packet format: ProtocolV1 (default) or ProtocolV2. Inbound packets of every version are always accepted.
+	WireVersion ProtocolVersion
 }
 
 // STUNConfig selects a STUN server and the exchange deadline.

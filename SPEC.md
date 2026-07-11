@@ -10,7 +10,7 @@
 
 `StartUdp` keeps the older blocking API. It starts the same UDP listener and blocks until the server stops.
 
-`StartRetryUdpContext` starts a retrying UDP listener with a random 128-bit session ID. Application code reads delivered messages from `Incoming`, keeps using `Outgoing` for compatibility, or calls `Send` for a delivery handle. Every retry message receives a random 128-bit message ID and a diagnostic sequence. `Close` and `Done` wait for owned retry and network I/O loops, complete pending delivery handles as canceled, and do not wait for the application processor.
+`StartRetryUdpContext` starts a retrying UDP listener with a random 128-bit session ID. Application code reads delivered messages from `Incoming`, keeps using `Outgoing` for compatibility, or calls `Send` for a delivery handle. Every retry message receives a random 128-bit message ID and a diagnostic sequence. Outgoing packets use the format selected by `RetryConfig.WireVersion`. `Close` and `Done` wait for owned retry and network I/O loops, complete pending delivery handles as canceled, and do not wait for the application processor.
 
 `StartRetryUdp` keeps the older blocking retry API. It uses `DefaultRetryConfig`.
 
@@ -55,6 +55,7 @@ Diagnostic log lines write through the package variable `Logf`, which defaults t
 - `DeliveryTimeout`: default sender-local deadline. Default: `1m`.
 - `DisableDeliveryTimeout`: removes the default deadline when true. Default: `false`.
 - `AuthenticationKey`: optional shared HMAC-SHA256 key. Empty disables authentication; configured keys contain at least 32 bytes.
+- `WireVersion`: outgoing packet format, `1` (JSON) or `2` (binary). Default: `1`. Inbound packets of every version are always accepted.
 
 `SendRequest`
 
@@ -118,7 +119,9 @@ Version 1 acknowledgement:
 
 Version 1 decoding rejects unknown fields, trailing JSON, unsupported versions, malformed IDs, unknown kinds, and acknowledgement payloads. `Address`, `Port`, `Cached`, and `Deadline` are not transmitted in version 1. The receiver fills `Address` and `Port` from the normalized UDP source endpoint.
 
-When authentication is enabled, HMAC-SHA256 covers the compact fixed-order version, kind, session ID, message ID, sequence, and data object with `auth` omitted. Empty keys send and accept only unsigned packets. Configured keys reject unsigned packets and every legacy packet. Servers without a key reject signed packets. Comparison is constant-time. Keys never appear in errors or logs.
+Version 2 data and acknowledgement packets are binary and big-endian: magic byte `0xB2`, version byte `2`, kind byte (`1` data, `2` ack), flags byte (bit 0 marks a signature trailer), 16 raw session ID bytes, 16 raw message ID bytes, an unsigned 64-bit sequence, and the payload running to the end of the packet, followed by a 32-byte HMAC-SHA256 trailer when the signed flag is set. The header is 44 bytes. Decoding rejects short headers, other version bytes, unknown flags, unknown kinds, acknowledgement payloads, sequences that overflow the platform integer, and signed packets shorter than the trailer. The magic byte cannot collide with JSON packets, which start with `{`, or STUN packets, whose first two bits are zero. Receivers detect each packet's format, and acknowledgements answer in the format of the message they acknowledge.
+
+When authentication is enabled, HMAC-SHA256 covers the compact fixed-order version, kind, session ID, message ID, sequence, and data envelope. The envelope embeds the packet's protocol version, so a signature never validates across formats. Version 1 carries the HMAC in `auth`; version 2 carries it as the binary trailer. Empty keys send and accept only unsigned packets. Configured keys reject unsigned packets and every legacy packet. Servers without a key reject signed packets. Comparison is constant-time. Keys never appear in errors or logs.
 
 ## Retry Algorithm
 
