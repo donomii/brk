@@ -22,6 +22,8 @@ The package function `DiscoverExternalAddress` uses a temporary UDP socket. `Udp
 
 `PunchPeer` sends marked STUN binding requests from the live socket until a peer replies or the configured attempts end. `KeepPeerAlive` immediately sends a marked STUN binding indication and repeats at the configured interval until its context or server ends.
 
+Diagnostic log lines write through the package variable `Logf`, which defaults to `log.Printf`. Applications may replace it with any concurrency-safe formatter.
+
 ## Public Types
 
 `UdpMessage`

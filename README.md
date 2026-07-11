@@ -14,6 +14,17 @@ Message-level reliable UDP for Go.
 - IPv4 and IPv6 endpoints through `netip.AddrPort`.
 - STUN discovery through the live server socket, peer hole punching, and keepalives.
 
+## Comparison
+
+| Property | brk | raw UDP | TCP | QUIC |
+| --- | --- | --- | --- | --- |
+| Message boundaries | preserved | preserved | stream; the application re-frames | preserved |
+| Delivery | acknowledged with retries | none | acknowledged | acknowledged |
+| Ordering | none | none | total order | per stream |
+| Connection setup | none | none | handshake | handshake with TLS |
+| Payload encryption | none; optional HMAC integrity | none | none | always TLS |
+| Dependencies | Go standard library | Go standard library | Go standard library | third-party library |
+
 ## Install
 
 ```sh
@@ -64,11 +75,11 @@ Run the local hole-punch and keepalive demo:
 Two-terminal chat demo:
 
 ```sh
-go run ./example -ip 127.0.0.1 -port 6000 127.0.0.1 6001
+go run ./examples/chat -ip 127.0.0.1 -port 6000 127.0.0.1 6001
 ```
 
 ```sh
-go run ./example -ip 127.0.0.1 -port 6001 127.0.0.1 6000
+go run ./examples/chat -ip 127.0.0.1 -port 6001 127.0.0.1 6000
 ```
 
 ## Delivery receipts
@@ -150,6 +161,14 @@ fmt.Printf("sent=%d received=%d acked=%d retried=%d duplicates=%d failed=%d drop
 - `Rejected`: messages rejected before queueing, including pending-limit and packet-validation failures.
 - `AuthenticationFailures`: inbound packets rejected by authentication.
 - `InvalidPackets`: inbound retry packets rejected by protocol validation.
+
+## Logging
+
+Diagnostics write through the package variable `Logf`, which defaults to `log.Printf`. Point it at your own logger; the replacement must be safe for concurrent use:
+
+```go
+brk.Logf = myLogger.Printf
+```
 
 ## STUN
 

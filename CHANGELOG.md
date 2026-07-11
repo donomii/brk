@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Added the `Logf` package variable so applications can route brk diagnostics into their own logger.
+- Replaced per-message duplicate-cache scans with an expiry-ordered queue, making inbound bookkeeping proportional to expired entries instead of all cached entries.
+- Recycled receive buffers through a pool to cut per-datagram allocation.
+- Added STUN parser coverage for XOR-mapped IPv6 addresses and odd-length attribute skipping, and a socket-level duplicate-suppression test.
+- Moved the two-terminal chat example to `examples/chat`.
+- Added macOS runners and a format gate to CI, and a tag-driven release workflow.
+- Removed the unused GitHub Pages configuration.
+
 ## v0.1.0 - 2026-07-10
 
 - Added terminal delivery receipts, deadlines, bounded pending queues, exponential backoff, deterministic jitter, and precise write results.

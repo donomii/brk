@@ -10,16 +10,20 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         go-version: ["1.22.x", "stable"]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
+      - name: Format
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == 'stable'
+        run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -27,10 +31,10 @@ jobs:
       - name: Race test
         run: go test -race -count=1 ./...
       - name: Generate coverage
-        if: matrix.go-version == 'stable'
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == 'stable'
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out .
       - name: Upload coverage
-        if: github.event_name == 'push' && matrix.go-version == 'stable'
+        if: github.event_name == 'push' && matrix.os == 'ubuntu-latest' && matrix.go-version == 'stable'
         uses: codecov/codecov-action@v7
         with:
           files: ./coverage.out
