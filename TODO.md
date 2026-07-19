@@ -4,7 +4,7 @@ Remaining roadmap items, roughly ordered by payoff.
 
 ## Features
 
-- [ ] Large-message fragmentation and reassembly, so callers stop caring about datagram size limits.
+- [x] Large-message fragmentation and reassembly, so callers stop caring about datagram size limits.
 - [ ] Opt-in per-peer ordered delivery (hold-back queue) for FIFO delivery without switching to TCP.
 
 ## Repo

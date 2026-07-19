@@ -89,6 +89,14 @@ type UdpMessage struct {
 	MessageID MessageID
 	Deadline  time.Time
 	Signature string
+	// FragmentGroup joins the fragments of one large message; empty for
+	// unfragmented messages.
+	FragmentGroup string
+	// FragmentIndex is this fragment's zero-based position in its group.
+	FragmentIndex int
+	// FragmentCount is the number of fragments in the group; zero marks an
+	// unfragmented message.
+	FragmentCount int
 }
 
 // RetryConfig controls retry queues, timing, limits, and duplicate retention.
@@ -121,6 +129,13 @@ type RetryConfig struct {
 	AuthenticationKey []byte
 	// WireVersion selects the outgoing packet format: ProtocolV1 (default) or ProtocolV2. Inbound packets of every version are always accepted.
 	WireVersion ProtocolVersion
+	// FragmentPayloadBytes is the most application bytes one packet carries
+	// before an outgoing message is split into fragments. Zero uses the
+	// largest payload the wire version can carry.
+	FragmentPayloadBytes int
+	// ReassemblyTTL is how long a partial fragment group waits for its
+	// remaining fragments before it is discarded.
+	ReassemblyTTL time.Duration
 }
 
 // STUNConfig selects a STUN server and the exchange deadline.
@@ -277,6 +292,7 @@ type retryCacheEntry struct {
 	LastError       string
 	LastWriteFailed bool
 	Delivery        *Delivery
+	Fragment        *fragmentGroupDelivery
 }
 
 type retryAction struct {

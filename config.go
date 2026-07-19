@@ -25,6 +25,7 @@ func DefaultRetryConfig() RetryConfig {
 		JitterFraction:    defaultJitterFraction,
 		DeliveryTimeout:   time.Minute,
 		WireVersion:       ProtocolV1,
+		ReassemblyTTL:     5 * time.Minute,
 	}
 }
 
@@ -102,6 +103,18 @@ func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 		config.WireVersion = defaults.WireVersion
 	} else if config.WireVersion != ProtocolV1 && config.WireVersion != ProtocolV2 {
 		return RetryConfig{}, fmt.Errorf("retry config invalid: expected wire version %d or %d, received %d", ProtocolV1, ProtocolV2, config.WireVersion)
+	}
+
+	if config.FragmentPayloadBytes < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected fragment payload bytes zero or greater, received %d", config.FragmentPayloadBytes)
+	} else if config.FragmentPayloadBytes > maxFragmentPayload(config.WireVersion) {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected fragment payload bytes at most %d for wire version %d, received %d", maxFragmentPayload(config.WireVersion), config.WireVersion, config.FragmentPayloadBytes)
+	}
+
+	if config.ReassemblyTTL == 0 {
+		config.ReassemblyTTL = defaults.ReassemblyTTL
+	} else if config.ReassemblyTTL < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected reassembly TTL greater than zero, received %v", config.ReassemblyTTL)
 	}
 
 	return config, nil

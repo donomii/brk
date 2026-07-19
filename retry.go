@@ -30,6 +30,7 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 	}
 
 	seenCache := newReceivedMessageCache()
+	reassembly := newReassemblyCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	appincoming := make(chan UdpMessage, resolved.QueueLength)
@@ -50,7 +51,7 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 		}()
 		go func() {
 			defer retryTasks.Done()
-			forwardRetryIncoming(retryCtx, resolved, seenCache, cache, &cacheLock, appincoming, netincoming, netoutgoing, stats)
+			forwardRetryIncoming(retryCtx, resolved, seenCache, reassembly, cache, &cacheLock, appincoming, netincoming, netoutgoing, stats)
 		}()
 		go func() {
 			defer retryTasks.Done()
@@ -101,7 +102,7 @@ func retryCachedMessages(ctx context.Context, config RetryConfig, cache map[int]
 	}
 }
 
-func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *receivedMessageCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
+func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *receivedMessageCache, reassembly *reassemblyCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
 	defer close(appincoming)
 	for {
 		select {
@@ -114,7 +115,7 @@ func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *re
 			if !validateRetryPacket(message, config, stats) {
 				continue
 			}
-			if !handleRetryIncoming(ctx, message, seenCache, cache, cacheLock, config, appincoming, netoutgoing, stats, time.Now()) {
+			if !handleRetryIncoming(ctx, message, seenCache, reassembly, cache, cacheLock, config, appincoming, netoutgoing, stats, time.Now()) {
 				return
 			}
 		}
@@ -327,6 +328,10 @@ func recordRetryTerminal(action retryAction, now time.Time, stats *DeliveryStats
 }
 
 func completeEntryDelivery(entry retryCacheEntry, status DeliveryStatus, reason DeliveryReason, now time.Time) {
+	if entry.Fragment != nil {
+		entry.Fragment.complete(entry, status, reason, now)
+		return
+	}
 	target, _ := entry.Message.Endpoint()
 	result := DeliveryResult{SessionID: entry.Message.SessionID, MessageID: entry.Message.MessageID, Target: target, Status: status, Reason: reason, Attempts: entry.Attempts, Latency: now.Sub(entry.AcceptedAt), WriteError: entry.LastError}
 	completeDelivery(entry.Delivery, result)
@@ -345,7 +350,7 @@ func finishPendingDeliveries(cache map[int]retryCacheEntry, cacheLock *sync.Mute
 	}
 }
 
-func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *receivedMessageCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
+func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *receivedMessageCache, reassembly *reassemblyCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
 	if message.Type == ackType {
 		entry, removed := removeAcknowledgedMessage(message, cache, cacheLock)
 		if removed {
@@ -357,9 +362,7 @@ func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *rec
 
 	newMessage := rememberIncomingMessage(message, seenCache, config.DuplicateTTL, now)
 	if newMessage {
-		select {
-		case appincoming <- message:
-		case <-ctx.Done():
+		if !deliverIncomingMessage(ctx, message, reassembly, config, appincoming, now) {
 			return false
 		}
 	} else {
@@ -376,6 +379,34 @@ func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *rec
 	}
 	select {
 	case netoutgoing <- acknowledgement:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// deliverIncomingMessage forwards an application message to appincoming.
+// Fragments are collected until their group completes; only the assembled
+// message reaches the application. The bool is false only when ctx is
+// cancelled mid-send, matching handleRetryIncoming's return contract.
+func deliverIncomingMessage(ctx context.Context, message UdpMessage, reassembly *reassemblyCache, config RetryConfig, appincoming chan UdpMessage, now time.Time) bool {
+	if message.FragmentCount == 0 {
+		return sendToApp(ctx, appincoming, message)
+	}
+	assembled, complete, err := reassembly.add(message, config.ReassemblyTTL, now)
+	if err != nil {
+		logReassemblyFailure(message, err)
+		return true
+	}
+	if !complete {
+		return true
+	}
+	return sendToApp(ctx, appincoming, assembled)
+}
+
+func sendToApp(ctx context.Context, appincoming chan UdpMessage, message UdpMessage) bool {
+	select {
+	case appincoming <- message:
 		return true
 	case <-ctx.Done():
 		return false
@@ -462,27 +493,50 @@ func (cache *receivedMessageCache) prune(duplicateTTL time.Duration, now time.Ti
 
 func queueOutgoingRequest(ctx context.Context, config RetryConfig, sessionID SessionID, request outboundRequest, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, netoutgoing chan UdpMessage, stats *DeliveryStats) bool {
 	now := time.Now()
-	message, err := prepareOutgoingMessage(request.Message, config, sessionID, now)
+	limit := fragmentPayloadLimit(config)
+	if len(request.Message.Data) <= limit {
+		return queuePreparedMessage(ctx, config, sessionID, request.Message, request.Delivery, nil, cache, cacheLock, netoutgoing, stats, now)
+	}
+
+	fragments, err := fragmentOutgoingMessage(request.Message, limit)
 	if err != nil {
-		rejectOutgoingRequest(request, message, err, DeliveryReasonInvalidMessage, now, stats)
+		rejectOutgoingEntry(retryCacheEntry{Message: request.Message, AcceptedAt: now, Delivery: request.Delivery}, err, DeliveryReasonInvalidMessage, now, stats)
 		return true
 	}
-	entry := retryCacheEntry{Message: message, AcceptedAt: now, Attempts: 1, InFlight: true, Delivery: request.Delivery}
+	var group *fragmentGroupDelivery
+	if request.Delivery != nil {
+		group = newFragmentGroupDelivery(request.Delivery, len(fragments), now)
+	}
+	for _, fragment := range fragments {
+		if !queuePreparedMessage(ctx, config, sessionID, fragment, nil, group, cache, cacheLock, netoutgoing, stats, now) {
+			return false
+		}
+	}
+	return true
+}
+
+func queuePreparedMessage(ctx context.Context, config RetryConfig, sessionID SessionID, message UdpMessage, delivery *Delivery, group *fragmentGroupDelivery, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
+	prepared, err := prepareOutgoingMessage(message, config, sessionID, now)
+	if err != nil {
+		rejectOutgoingEntry(retryCacheEntry{Message: prepared, AcceptedAt: now, Delivery: delivery, Fragment: group}, err, DeliveryReasonInvalidMessage, now, stats)
+		return true
+	}
+	entry := retryCacheEntry{Message: prepared, AcceptedAt: now, Attempts: 1, InFlight: true, Delivery: delivery, Fragment: group}
 	cacheLock.Lock()
 	pending := len(cache)
 	if pending >= config.MaxPending {
 		cacheLock.Unlock()
-		err = fmt.Errorf("queue retry UDP message %q to %s:%d failed: pending limit %d reached with %d messages", message.MessageID, message.Address, message.Port, config.MaxPending, pending)
-		rejectOutgoingRequest(request, message, err, DeliveryReasonPendingLimit, now, stats)
+		err = fmt.Errorf("queue retry UDP message %q to %s:%d failed: pending limit %d reached with %d messages", prepared.MessageID, prepared.Address, prepared.Port, config.MaxPending, pending)
+		rejectOutgoingEntry(retryCacheEntry{Message: prepared, AcceptedAt: now, Delivery: delivery, Fragment: group}, err, DeliveryReasonPendingLimit, now, stats)
 		return true
 	}
-	cache[message.Sequence] = entry
+	cache[prepared.Sequence] = entry
 	cacheLock.Unlock()
 	select {
-	case netoutgoing <- message:
+	case netoutgoing <- prepared:
 		return true
 	case <-ctx.Done():
-		removeQueuedMessage(message, cache, cacheLock)
+		removeQueuedMessage(prepared, cache, cacheLock)
 		completeEntryDelivery(entry, DeliveryCanceled, DeliveryReasonServerShutdown, time.Now())
 		return false
 	}
@@ -517,10 +571,10 @@ func prepareOutgoingMessage(message UdpMessage, config RetryConfig, sessionID Se
 	return authenticated, err
 }
 
-func rejectOutgoingRequest(request outboundRequest, message UdpMessage, err error, reason DeliveryReason, now time.Time, stats *DeliveryStats) {
+func rejectOutgoingEntry(entry retryCacheEntry, err error, reason DeliveryReason, now time.Time, stats *DeliveryStats) {
 	stats.addRejected()
-	logRejectedMessage(message, err)
-	entry := retryCacheEntry{Message: message, AcceptedAt: now, LastError: err.Error(), Delivery: request.Delivery}
+	logRejectedMessage(entry.Message, err)
+	entry.LastError = err.Error()
 	completeEntryDelivery(entry, DeliveryRejected, reason, now)
 }
 

@@ -46,6 +46,10 @@ func logRejectedMessage(message UdpMessage, err error) {
 	Logf("reject outgoing UDP message: session_id=%s message_id=%s target=%s:%d error=%v", message.SessionID, message.MessageID, message.Address, message.Port, err)
 }
 
+func logReassemblyFailure(message UdpMessage, err error) {
+	Logf("reassemble UDP fragment failed: session_id=%s group=%s index=%d count=%d source=%s:%d error=%v", message.SessionID, message.FragmentGroup, message.FragmentIndex, message.FragmentCount, message.Address, message.Port, err)
+}
+
 func logSTUNPacketFailure(source netip.AddrPort, err error) {
 	Logf("handle STUN packet failed: source=%v error=%v", source, err)
 }

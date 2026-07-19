@@ -33,6 +33,9 @@ type v1WireMessage struct {
 	MessageID MessageID       `json:"mid"`
 	Sequence  int             `json:"seq"`
 	Data      []byte          `json:"data,omitempty"`
+	Group     string          `json:"grp,omitempty"`
+	Index     int             `json:"idx,omitempty"`
+	Count     int             `json:"cnt,omitempty"`
 	Auth      string          `json:"auth,omitempty"`
 }
 
@@ -46,6 +49,9 @@ type wireEnvelope struct {
 	MessageID MessageID       `json:"mid"`
 	Sequence  int             `json:"seq"`
 	Data      []byte          `json:"data,omitempty"`
+	Group     string          `json:"grp,omitempty"`
+	Index     int             `json:"idx,omitempty"`
+	Count     int             `json:"cnt,omitempty"`
 }
 
 func newSessionID() (SessionID, error) {
@@ -208,11 +214,18 @@ func decodeV1WireMessage(packet []byte) (UdpMessage, error) {
 	if err != nil {
 		return UdpMessage{}, err
 	}
-	message := UdpMessage{Data: wire.Data, Sequence: wire.Sequence, Version: wire.Version, SessionID: wire.SessionID, MessageID: wire.MessageID, Signature: wire.Auth}
+	message := UdpMessage{Data: wire.Data, Sequence: wire.Sequence, Version: wire.Version, SessionID: wire.SessionID, MessageID: wire.MessageID, Signature: wire.Auth, FragmentGroup: wire.Group, FragmentIndex: wire.Index, FragmentCount: wire.Count}
 	if wire.Kind == "ack" {
 		message.Type = ackType
+	} else if wire.Kind == "frag" {
+		if wire.Count == 0 {
+			return UdpMessage{}, fmt.Errorf("decode protocol v1 UDP message: expected fragment count for kind frag")
+		}
 	} else if wire.Kind != "data" {
-		return UdpMessage{}, fmt.Errorf("decode protocol v1 UDP message: expected kind data or ack, received %q", wire.Kind)
+		return UdpMessage{}, fmt.Errorf("decode protocol v1 UDP message: expected kind data, ack, or frag, received %q", wire.Kind)
+	}
+	if wire.Kind != "frag" && (wire.Group != "" || wire.Index != 0 || wire.Count != 0) {
+		return UdpMessage{}, fmt.Errorf("decode protocol v1 UDP message: expected fragment fields only for kind frag, received kind %q", wire.Kind)
 	}
 	err = validateVersionedMessage(message)
 	if err != nil {
@@ -238,7 +251,7 @@ func v1MessageForWire(message UdpMessage) (v1WireMessage, error) {
 	if err != nil {
 		return v1WireMessage{}, err
 	}
-	return v1WireMessage{Version: unsigned.Version, Kind: unsigned.Kind, SessionID: unsigned.SessionID, MessageID: unsigned.MessageID, Sequence: unsigned.Sequence, Data: unsigned.Data, Auth: message.Signature}, nil
+	return v1WireMessage{Version: unsigned.Version, Kind: unsigned.Kind, SessionID: unsigned.SessionID, MessageID: unsigned.MessageID, Sequence: unsigned.Sequence, Data: unsigned.Data, Group: unsigned.Group, Index: unsigned.Index, Count: unsigned.Count, Auth: message.Signature}, nil
 }
 
 func makeWireEnvelope(message UdpMessage) (wireEnvelope, error) {
@@ -249,8 +262,10 @@ func makeWireEnvelope(message UdpMessage) (wireEnvelope, error) {
 	kind := "data"
 	if message.Type == ackType {
 		kind = "ack"
+	} else if message.FragmentCount > 0 {
+		kind = "frag"
 	}
-	return wireEnvelope{Version: message.Version, Kind: kind, SessionID: message.SessionID, MessageID: message.MessageID, Sequence: message.Sequence, Data: message.Data}, nil
+	return wireEnvelope{Version: message.Version, Kind: kind, SessionID: message.SessionID, MessageID: message.MessageID, Sequence: message.Sequence, Data: message.Data, Group: message.FragmentGroup, Index: message.FragmentIndex, Count: message.FragmentCount}, nil
 }
 
 func validateVersionedMessage(message UdpMessage) error {
@@ -268,6 +283,22 @@ func validateVersionedMessage(message UdpMessage) error {
 	}
 	if message.Type == ackType && len(message.Data) != 0 {
 		return fmt.Errorf("validate protocol v%d acknowledgement %q failed: expected empty data, received %d bytes", message.Version, message.MessageID, len(message.Data))
+	}
+	if message.FragmentCount < 0 || message.FragmentIndex < 0 {
+		return fmt.Errorf("validate protocol v%d UDP message %q failed: expected fragment index and count zero or greater, received index %d count %d", message.Version, message.MessageID, message.FragmentIndex, message.FragmentCount)
+	}
+	if message.FragmentCount > 0 {
+		if message.Type == ackType {
+			return fmt.Errorf("validate protocol v%d acknowledgement %q failed: expected no fragment fields", message.Version, message.MessageID)
+		}
+		if !validWireID(message.FragmentGroup) {
+			return fmt.Errorf("validate protocol v%d UDP message %q failed: expected fragment group as 32 lowercase hexadecimal characters, received %q", message.Version, message.MessageID, message.FragmentGroup)
+		}
+		if message.FragmentIndex >= message.FragmentCount {
+			return fmt.Errorf("validate protocol v%d UDP message %q failed: expected fragment index below count %d, received %d", message.Version, message.MessageID, message.FragmentCount, message.FragmentIndex)
+		}
+	} else if message.FragmentGroup != "" || message.FragmentIndex != 0 {
+		return fmt.Errorf("validate protocol v%d UDP message %q failed: expected no fragment fields without a fragment count", message.Version, message.MessageID)
 	}
 	return nil
 }
@@ -288,7 +319,7 @@ func legacyMessageForWire(message UdpMessage) legacyWireMessage {
 //
 //	offset  0: magic 0xB2
 //	offset  1: protocol version, 2
-//	offset  2: kind, 1 data or 2 ack
+//	offset  2: kind, 1 data, 2 ack, or 3 fragment
 //	offset  3: flags, bit 0 set when a signature trailer is present
 //	offset  4: session ID, 16 raw bytes
 //	offset 20: message ID, 16 raw bytes
@@ -296,16 +327,25 @@ func legacyMessageForWire(message UdpMessage) legacyWireMessage {
 //	offset 44: payload until the end of the packet
 //	trailer  : 32-byte HMAC-SHA256 when the signed flag is set
 //
+// Fragment packets extend the header before the payload:
+//
+//	offset 44: fragment group ID, 16 raw bytes
+//	offset 60: fragment index, uint32
+//	offset 64: fragment count, uint32
+//	offset 68: payload until the end of the packet
+//
 // The magic byte cannot collide with JSON packets, which start with '{', or
 // with STUN packets, whose first two bits are zero.
 const (
-	binaryWireMagic     byte = 0xB2
-	binaryWireVersion   byte = 2
-	binaryKindData      byte = 1
-	binaryKindAck       byte = 2
-	binaryFlagSigned    byte = 0x01
-	binaryHeaderSize         = 44
-	binarySignatureSize      = sha256.Size
+	binaryWireMagic          byte = 0xB2
+	binaryWireVersion        byte = 2
+	binaryKindData           byte = 1
+	binaryKindAck            byte = 2
+	binaryKindFragment       byte = 3
+	binaryFlagSigned         byte = 0x01
+	binaryHeaderSize              = 44
+	binaryFragmentHeaderSize      = 68
+	binarySignatureSize           = sha256.Size
 )
 
 func isBinaryWirePacket(packet []byte) bool {
@@ -330,8 +370,15 @@ func encodeBinaryWireMessage(message UdpMessage) ([]byte, error) {
 	}
 
 	kind := binaryKindData
+	headerSize := binaryHeaderSize
 	if message.Type == ackType {
 		kind = binaryKindAck
+	} else if message.FragmentCount > 0 {
+		kind = binaryKindFragment
+		headerSize = binaryFragmentHeaderSize
+		if uint64(message.FragmentCount) > math.MaxUint32 {
+			return nil, fmt.Errorf("encode binary UDP message %q failed: expected fragment count at most %d, received %d", message.MessageID, uint32(math.MaxUint32), message.FragmentCount)
+		}
 	}
 	flags := byte(0)
 	var signature []byte
@@ -346,7 +393,7 @@ func encodeBinaryWireMessage(message UdpMessage) ([]byte, error) {
 		flags = flags | binaryFlagSigned
 	}
 
-	packet := make([]byte, binaryHeaderSize, binaryHeaderSize+len(message.Data)+len(signature))
+	packet := make([]byte, headerSize, headerSize+len(message.Data)+len(signature))
 	packet[0] = binaryWireMagic
 	packet[1] = binaryWireVersion
 	packet[2] = kind
@@ -354,6 +401,15 @@ func encodeBinaryWireMessage(message UdpMessage) ([]byte, error) {
 	copy(packet[4:20], sessionID)
 	copy(packet[20:36], messageID)
 	binary.BigEndian.PutUint64(packet[36:44], uint64(message.Sequence))
+	if kind == binaryKindFragment {
+		groupID, groupErr := hex.DecodeString(message.FragmentGroup)
+		if groupErr != nil {
+			return nil, fmt.Errorf("encode binary UDP message %q fragment group: %w", message.MessageID, groupErr)
+		}
+		copy(packet[44:60], groupID)
+		binary.BigEndian.PutUint32(packet[60:64], uint32(message.FragmentIndex))
+		binary.BigEndian.PutUint32(packet[64:68], uint32(message.FragmentCount))
+	}
 	packet = append(packet, message.Data...)
 	packet = append(packet, signature...)
 	return packet, nil
@@ -371,10 +427,19 @@ func decodeBinaryWireMessage(packet []byte) (UdpMessage, error) {
 	}
 
 	message := UdpMessage{Version: ProtocolV2, SessionID: SessionID(hex.EncodeToString(packet[4:20])), MessageID: MessageID(hex.EncodeToString(packet[20:36]))}
+	headerSize := binaryHeaderSize
 	if packet[2] == binaryKindAck {
 		message.Type = ackType
+	} else if packet[2] == binaryKindFragment {
+		headerSize = binaryFragmentHeaderSize
+		if len(packet) < headerSize {
+			return UdpMessage{}, fmt.Errorf("decode binary UDP message %q: expected at least %d fragment header bytes, received %d", message.MessageID, headerSize, len(packet))
+		}
+		message.FragmentGroup = hex.EncodeToString(packet[44:60])
+		message.FragmentIndex = int(binary.BigEndian.Uint32(packet[60:64]))
+		message.FragmentCount = int(binary.BigEndian.Uint32(packet[64:68]))
 	} else if packet[2] != binaryKindData {
-		return UdpMessage{}, fmt.Errorf("decode binary UDP message %q: expected kind %d or %d, received %d", message.MessageID, binaryKindData, binaryKindAck, packet[2])
+		return UdpMessage{}, fmt.Errorf("decode binary UDP message %q: expected kind %d, %d, or %d, received %d", message.MessageID, binaryKindData, binaryKindAck, binaryKindFragment, packet[2])
 	}
 
 	sequence := binary.BigEndian.Uint64(packet[36:44])
@@ -383,7 +448,7 @@ func decodeBinaryWireMessage(packet []byte) (UdpMessage, error) {
 	}
 	message.Sequence = int(sequence)
 
-	body := packet[binaryHeaderSize:]
+	body := packet[headerSize:]
 	if packet[3]&binaryFlagSigned != 0 {
 		if len(body) < binarySignatureSize {
 			return UdpMessage{}, fmt.Errorf("decode binary UDP message %q: expected %d trailing signature bytes, received %d body bytes", message.MessageID, binarySignatureSize, len(body))
