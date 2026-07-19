@@ -26,6 +26,9 @@ func DefaultRetryConfig() RetryConfig {
 		DeliveryTimeout:   time.Minute,
 		WireVersion:       ProtocolV1,
 		ReassemblyTTL:     5 * time.Minute,
+		// Ten seconds covers a lost predecessor's first retransmission
+		// (AckTimeout plus one RetryInterval scan) with margin.
+		OrderingHoldTimeout: 10 * time.Second,
 	}
 }
 
@@ -115,6 +118,12 @@ func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 		config.ReassemblyTTL = defaults.ReassemblyTTL
 	} else if config.ReassemblyTTL < 0 {
 		return RetryConfig{}, fmt.Errorf("retry config invalid: expected reassembly TTL greater than zero, received %v", config.ReassemblyTTL)
+	}
+
+	if config.OrderingHoldTimeout == 0 {
+		config.OrderingHoldTimeout = defaults.OrderingHoldTimeout
+	} else if config.OrderingHoldTimeout < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected ordering hold timeout greater than zero, received %v", config.OrderingHoldTimeout)
 	}
 
 	return config, nil

@@ -369,7 +369,7 @@ func TestHandleRetryIncomingAcknowledgesNewMessagesAndDropsDuplicates(t *testing
 	netoutgoing := make(chan UdpMessage, 2)
 	message := UdpMessage{Data: []byte("hello"), Address: "127.0.0.1", Port: 9876, Sequence: 88}
 
-	handleRetryIncoming(context.Background(), message, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), message, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
 
 	ack := <-netoutgoing
 	if ack.Type != ackType {
@@ -383,7 +383,7 @@ func TestHandleRetryIncomingAcknowledgesNewMessagesAndDropsDuplicates(t *testing
 		t.Fatalf("delivered sequence mismatch: expected %d, received %d", message.Sequence, delivered.Sequence)
 	}
 
-	handleRetryIncoming(context.Background(), message, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), message, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
 	duplicateAck := <-netoutgoing
 	if duplicateAck.Type != ackType {
 		t.Fatalf("duplicate ack type mismatch: expected %q, received %q", ackType, duplicateAck.Type)
@@ -411,8 +411,8 @@ func TestHandleRetryIncomingKeepsSameSequenceFromDifferentPeers(t *testing.T) {
 	first := UdpMessage{Data: []byte("first"), Address: "127.0.0.1", Port: 1001, Sequence: 88}
 	second := UdpMessage{Data: []byte("second"), Address: "127.0.0.1", Port: 1002, Sequence: 88}
 
-	handleRetryIncoming(context.Background(), first, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
-	handleRetryIncoming(context.Background(), second, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), first, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), second, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
 
 	if received := receiveMessage(t, appincoming); string(received.Data) != "first" {
 		t.Fatalf("first peer delivery mismatch: expected %q, received %q", "first", string(received.Data))
@@ -438,7 +438,7 @@ func TestHandleRetryIncomingDoesNotAcknowledgeUndeliveredMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	handled := handleRetryIncoming(ctx, message, seenCache, newReassemblyCache(), cache, &cacheLock, DefaultRetryConfig(), appincoming, netoutgoing, NewDeliveryStats(), time.Now())
+	handled := handleRetryIncoming(ctx, message, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, DefaultRetryConfig(), appincoming, netoutgoing, NewDeliveryStats(), time.Now())
 	if handled {
 		t.Fatalf("cancelled retry handler mismatch: expected false, received true")
 	}
@@ -456,7 +456,7 @@ func TestHandleRetryIncomingRemovesAcknowledgedCacheEntry(t *testing.T) {
 	appincoming := make(chan UdpMessage, 1)
 	netoutgoing := make(chan UdpMessage, 1)
 
-	handleRetryIncoming(context.Background(), UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
 
 	cacheLock.Lock()
 	_, exists := cache[55]
@@ -468,7 +468,7 @@ func TestHandleRetryIncomingRemovesAcknowledgedCacheEntry(t *testing.T) {
 		t.Fatalf("ack stats mismatch: expected %d, received %d", 1, stats.Snapshot().Acked)
 	}
 
-	handleRetryIncoming(context.Background(), UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, seenCache, newReassemblyCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
+	handleRetryIncoming(context.Background(), UdpMessage{Address: "127.0.0.1", Port: 1234, Sequence: 55, Type: ackType}, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, config, appincoming, netoutgoing, stats, time.Now())
 	if stats.Snapshot().Acked != 1 {
 		t.Fatalf("unknown ack stats mismatch: expected %d, received %d", 1, stats.Snapshot().Acked)
 	}
@@ -485,7 +485,7 @@ func TestHandleRetryIncomingRejectsWrongPeerAcknowledgement(t *testing.T) {
 		{Address: "127.0.0.2", Port: 1234, Sequence: 55, Type: ackType},
 	}
 	for _, acknowledgement := range wrongAcknowledgements {
-		handleRetryIncoming(context.Background(), acknowledgement, seenCache, newReassemblyCache(), cache, &cacheLock, DefaultRetryConfig(), make(chan UdpMessage, 1), make(chan UdpMessage, 1), stats, time.Now())
+		handleRetryIncoming(context.Background(), acknowledgement, seenCache, newReassemblyCache(), newOrderingCache(), cache, &cacheLock, DefaultRetryConfig(), make(chan UdpMessage, 1), make(chan UdpMessage, 1), stats, time.Now())
 	}
 
 	cacheLock.Lock()

@@ -65,6 +65,7 @@ func TestReassemblyCacheAssemblesOutOfOrderFragments(t *testing.T) {
 		fragments[index].Address = message.Address
 		fragments[index].Port = message.Port
 		fragments[index].SessionID = message.SessionID
+		fragments[index].Sequence = 100 + index
 	}
 
 	order := []int{2, 0, len(fragments) - 1}
@@ -72,7 +73,7 @@ func TestReassemblyCacheAssemblesOutOfOrderFragments(t *testing.T) {
 		if at == len(fragments)-1 {
 			continue
 		}
-		_, complete, err := cache.add(fragments[at], time.Minute, now)
+		_, _, complete, err := cache.add(fragments[at], time.Minute, now)
 		if err != nil {
 			t.Fatalf("add fragment %d failed: expected nil error, received %v", at, err)
 		}
@@ -82,17 +83,19 @@ func TestReassemblyCacheAssemblesOutOfOrderFragments(t *testing.T) {
 	}
 
 	var assembled UdpMessage
+	spanStart := 0
 	completed := false
 	for index := range fragments {
 		if index == 0 || index == 2 {
 			continue
 		}
-		message, complete, err := cache.add(fragments[index], time.Minute, now)
+		message, start, complete, err := cache.add(fragments[index], time.Minute, now)
 		if err != nil {
 			t.Fatalf("add fragment %d failed: expected nil error, received %v", index, err)
 		}
 		if complete {
 			assembled = message
+			spanStart = start
 			completed = true
 		}
 	}
@@ -108,6 +111,12 @@ func TestReassemblyCacheAssemblesOutOfOrderFragments(t *testing.T) {
 	if assembled.MessageID != MessageID(fragments[0].FragmentGroup) {
 		t.Fatalf("assembled message id mismatch: expected %q, received %q", fragments[0].FragmentGroup, assembled.MessageID)
 	}
+	if assembled.Sequence != 100+len(fragments)-1 {
+		t.Fatalf("assembled sequence mismatch: expected the group's highest sequence %d, received %d", 100+len(fragments)-1, assembled.Sequence)
+	}
+	if spanStart != 100 {
+		t.Fatalf("assembled span start mismatch: expected the group's lowest sequence %d, received %d", 100, spanStart)
+	}
 }
 
 func TestReassemblyCacheRejectsInconsistentCount(t *testing.T) {
@@ -117,10 +126,10 @@ func TestReassemblyCacheRejectsInconsistentCount(t *testing.T) {
 	first := UdpMessage{Data: []byte("a"), Address: "10.0.0.1", Port: 5000, SessionID: SessionID(group), FragmentGroup: group, FragmentIndex: 0, FragmentCount: 3}
 	conflicting := UdpMessage{Data: []byte("b"), Address: "10.0.0.1", Port: 5000, SessionID: SessionID(group), FragmentGroup: group, FragmentIndex: 1, FragmentCount: 4}
 
-	if _, _, err := cache.add(first, time.Minute, now); err != nil {
+	if _, _, _, err := cache.add(first, time.Minute, now); err != nil {
 		t.Fatalf("add first fragment failed: expected nil error, received %v", err)
 	}
-	if _, _, err := cache.add(conflicting, time.Minute, now); err == nil {
+	if _, _, _, err := cache.add(conflicting, time.Minute, now); err == nil {
 		t.Fatalf("inconsistent count mismatch: expected error, received nil")
 	}
 }
@@ -131,7 +140,7 @@ func TestReassemblyCacheExpiresPartialGroups(t *testing.T) {
 	group := "00112233445566778899aabbccddeeff"
 	first := UdpMessage{Data: []byte("a"), Address: "10.0.0.1", Port: 5000, SessionID: SessionID(group), FragmentGroup: group, FragmentIndex: 0, FragmentCount: 2}
 
-	if _, _, err := cache.add(first, time.Second, start); err != nil {
+	if _, _, _, err := cache.add(first, time.Second, start); err != nil {
 		t.Fatalf("add first fragment failed: expected nil error, received %v", err)
 	}
 	cache.prune(time.Second, start.Add(2*time.Second))

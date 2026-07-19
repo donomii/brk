@@ -136,6 +136,13 @@ type RetryConfig struct {
 	// ReassemblyTTL is how long a partial fragment group waits for its
 	// remaining fragments before it is discarded.
 	ReassemblyTTL time.Duration
+	// OrderedDelivery holds each peer session's inbound messages back until
+	// every earlier sequence is delivered, so Incoming preserves the sender's
+	// order. Off by default.
+	OrderedDelivery bool
+	// OrderingHoldTimeout is how long an out-of-order message waits for its
+	// sequence gap to fill before its stream releases it anyway.
+	OrderingHoldTimeout time.Duration
 }
 
 // STUNConfig selects a STUN server and the exchange deadline.

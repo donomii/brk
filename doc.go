@@ -8,6 +8,7 @@
 // Live servers can discover their external address with STUN, punch a peer endpoint, and send mapping keepalives.
 // The package-level DiscoverExternalAddress function remains available for probing with a temporary socket.
 //
-// brk does not provide message ordering, durable queues, congestion control, payload encryption, rendezvous, or TURN
-// relaying. Shared-key authentication protects packet integrity but does not encrypt payloads.
+// Delivery is unordered unless RetryConfig.OrderedDelivery enables the per-peer hold-back queue. brk does not provide
+// durable queues, congestion control, payload encryption, rendezvous, or TURN relaying. Shared-key authentication
+// protects packet integrity but does not encrypt payloads.
 package brk

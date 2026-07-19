@@ -20,7 +20,7 @@ Message-level reliable UDP for Go.
 | --- | --- | --- | --- | --- |
 | Message boundaries | preserved | preserved | stream; the application re-frames | preserved |
 | Delivery | acknowledged with retries | none | acknowledged | acknowledged |
-| Ordering | none | none | total order | per stream |
+| Ordering | opt-in per peer | none | total order | per stream |
 | Connection setup | none | none | handshake | handshake with TLS |
 | Payload encryption | none; optional HMAC integrity | none | none | always TLS |
 | Dependencies | Go standard library | Go standard library | Go standard library | third-party library |
@@ -222,7 +222,7 @@ Bind an IPv6 server with an explicit IPv6 literal such as `::1` or `::`. `LocalE
 
 ## Limitations
 
-- Messages are not ordered or persisted.
+- Messages are not persisted; delivery is unordered unless `RetryConfig.OrderedDelivery` enables the per-peer hold-back queue.
 - The library does not provide congestion control or payload encryption.
 - Encoded packets may not exceed 32,768 bytes; packets larger than the network path MTU may be fragmented.
 - Hole punching requires out-of-band candidate exchange, does not traverse every symmetric NAT, and does not replace TURN relaying.

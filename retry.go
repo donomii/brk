@@ -31,6 +31,7 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 
 	seenCache := newReceivedMessageCache()
 	reassembly := newReassemblyCache()
+	ordering := newOrderingCache()
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	appincoming := make(chan UdpMessage, resolved.QueueLength)
@@ -51,7 +52,7 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 		}()
 		go func() {
 			defer retryTasks.Done()
-			forwardRetryIncoming(retryCtx, resolved, seenCache, reassembly, cache, &cacheLock, appincoming, netincoming, netoutgoing, stats)
+			forwardRetryIncoming(retryCtx, resolved, seenCache, reassembly, ordering, cache, &cacheLock, appincoming, netincoming, netoutgoing, stats)
 		}()
 		go func() {
 			defer retryTasks.Done()
@@ -102,12 +103,28 @@ func retryCachedMessages(ctx context.Context, config RetryConfig, cache map[int]
 	}
 }
 
-func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *receivedMessageCache, reassembly *reassemblyCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
+func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *receivedMessageCache, reassembly *reassemblyCache, ordering *orderingCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, appincoming, netincoming, netoutgoing chan UdpMessage, stats *DeliveryStats) {
 	defer close(appincoming)
+	var flushTicks <-chan time.Time
+	if config.OrderedDelivery {
+		ticker := time.NewTicker(orderingFlushInterval(config.OrderingHoldTimeout))
+		defer ticker.Stop()
+		flushTicks = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case now := <-flushTicks:
+			released := ordering.flush(config.OrderingHoldTimeout, config.DuplicateTTL, now)
+			if len(released) > 0 {
+				logOrderingReleases(len(released))
+			}
+			for _, message := range released {
+				if !sendToApp(ctx, appincoming, message) {
+					return
+				}
+			}
 		case message, ok := <-netincoming:
 			if !ok {
 				return
@@ -115,7 +132,7 @@ func forwardRetryIncoming(ctx context.Context, config RetryConfig, seenCache *re
 			if !validateRetryPacket(message, config, stats) {
 				continue
 			}
-			if !handleRetryIncoming(ctx, message, seenCache, reassembly, cache, cacheLock, config, appincoming, netoutgoing, stats, time.Now()) {
+			if !handleRetryIncoming(ctx, message, seenCache, reassembly, ordering, cache, cacheLock, config, appincoming, netoutgoing, stats, time.Now()) {
 				return
 			}
 		}
@@ -350,7 +367,7 @@ func finishPendingDeliveries(cache map[int]retryCacheEntry, cacheLock *sync.Mute
 	}
 }
 
-func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *receivedMessageCache, reassembly *reassemblyCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
+func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *receivedMessageCache, reassembly *reassemblyCache, ordering *orderingCache, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, config RetryConfig, appincoming, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {
 	if message.Type == ackType {
 		entry, removed := removeAcknowledgedMessage(message, cache, cacheLock)
 		if removed {
@@ -362,7 +379,7 @@ func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *rec
 
 	newMessage := rememberIncomingMessage(message, seenCache, config.DuplicateTTL, now)
 	if newMessage {
-		if !deliverIncomingMessage(ctx, message, reassembly, config, appincoming, now) {
+		if !deliverIncomingMessage(ctx, message, reassembly, ordering, config, appincoming, now) {
 			return false
 		}
 	} else {
@@ -387,21 +404,32 @@ func handleRetryIncoming(ctx context.Context, message UdpMessage, seenCache *rec
 
 // deliverIncomingMessage forwards an application message to appincoming.
 // Fragments are collected until their group completes; only the assembled
-// message reaches the application. The bool is false only when ctx is
-// cancelled mid-send, matching handleRetryIncoming's return contract.
-func deliverIncomingMessage(ctx context.Context, message UdpMessage, reassembly *reassemblyCache, config RetryConfig, appincoming chan UdpMessage, now time.Time) bool {
-	if message.FragmentCount == 0 {
+// message reaches the application. With ordered delivery, messages pass
+// through the per-peer hold-back queue first. The bool is false only when ctx
+// is cancelled mid-send, matching handleRetryIncoming's return contract.
+func deliverIncomingMessage(ctx context.Context, message UdpMessage, reassembly *reassemblyCache, ordering *orderingCache, config RetryConfig, appincoming chan UdpMessage, now time.Time) bool {
+	spanStart := message.Sequence
+	if message.FragmentCount > 0 {
+		assembled, start, complete, err := reassembly.add(message, config.ReassemblyTTL, now)
+		if err != nil {
+			logReassemblyFailure(message, err)
+			return true
+		}
+		if !complete {
+			return true
+		}
+		message = assembled
+		spanStart = start
+	}
+	if !config.OrderedDelivery {
 		return sendToApp(ctx, appincoming, message)
 	}
-	assembled, complete, err := reassembly.add(message, config.ReassemblyTTL, now)
-	if err != nil {
-		logReassemblyFailure(message, err)
-		return true
+	for _, released := range ordering.add(message, spanStart, now) {
+		if !sendToApp(ctx, appincoming, released) {
+			return false
+		}
 	}
-	if !complete {
-		return true
-	}
-	return sendToApp(ctx, appincoming, assembled)
+	return true
 }
 
 func sendToApp(ctx context.Context, appincoming chan UdpMessage, message UdpMessage) bool {

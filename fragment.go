@@ -122,9 +122,11 @@ type reassemblyRecord struct {
 }
 
 type reassemblyGroup struct {
-	count     int
-	parts     map[int][]byte
-	startedAt time.Time
+	count       int
+	parts       map[int][]byte
+	startedAt   time.Time
+	minSequence int
+	maxSequence int
 }
 
 // reassemblyCache collects fragments until a group completes. Groups share
@@ -140,22 +142,31 @@ func newReassemblyCache() *reassemblyCache {
 
 // add stores one fragment and returns the assembled message once its group is
 // complete. The assembled message carries the fragment group ID as its
-// message ID, matching the sender's delivery result.
-func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duration, now time.Time) (UdpMessage, bool, error) {
+// message ID, matching the sender's delivery result, and the group's highest
+// fragment sequence; the returned span start is the lowest, so ordered
+// delivery can treat the assembled message as covering the group's whole
+// sequence range.
+func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duration, now time.Time) (UdpMessage, int, bool, error) {
 	cache.prune(reassemblyTTL, now)
 	key := reassemblyKey{Address: message.Address, Port: message.Port, SessionID: message.SessionID, Group: message.FragmentGroup}
 	group, exists := cache.groups[key]
 	if !exists {
-		group = &reassemblyGroup{count: message.FragmentCount, parts: map[int][]byte{}, startedAt: now}
+		group = &reassemblyGroup{count: message.FragmentCount, parts: map[int][]byte{}, startedAt: now, minSequence: message.Sequence, maxSequence: message.Sequence}
 		cache.groups[key] = group
 		cache.queue = append(cache.queue, reassemblyRecord{key: key, startedAt: now})
 	}
 	if group.count != message.FragmentCount {
-		return UdpMessage{}, false, fmt.Errorf("reassemble fragment group %q from %s:%d: expected %d fragments, received a fragment claiming %d", message.FragmentGroup, message.Address, message.Port, group.count, message.FragmentCount)
+		return UdpMessage{}, 0, false, fmt.Errorf("reassemble fragment group %q from %s:%d: expected %d fragments, received a fragment claiming %d", message.FragmentGroup, message.Address, message.Port, group.count, message.FragmentCount)
 	}
 	group.parts[message.FragmentIndex] = message.Data
+	if message.Sequence < group.minSequence {
+		group.minSequence = message.Sequence
+	}
+	if message.Sequence > group.maxSequence {
+		group.maxSequence = message.Sequence
+	}
 	if len(group.parts) < group.count {
-		return UdpMessage{}, false, nil
+		return UdpMessage{}, 0, false, nil
 	}
 
 	delete(cache.groups, key)
@@ -169,11 +180,12 @@ func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duratio
 	}
 	assembled := message
 	assembled.Data = data
+	assembled.Sequence = group.maxSequence
 	assembled.MessageID = MessageID(message.FragmentGroup)
 	assembled.FragmentGroup = ""
 	assembled.FragmentIndex = 0
 	assembled.FragmentCount = 0
-	return assembled, true, nil
+	return assembled, group.minSequence, true, nil
 }
 
 func (cache *reassemblyCache) prune(reassemblyTTL time.Duration, now time.Time) {
