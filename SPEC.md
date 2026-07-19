@@ -186,12 +186,15 @@ Keepalives are marked STUN binding indications. `KeepPeerAlive` sends immediatel
 
 `cmd/brk-lossy-demo` starts a retrying sender and a raw receiver. The receiver skips the first acknowledgement, accepts the retry, then acknowledges it.
 
+`assets/brk-lossy-demo.cast` records one real run of the lossy demo in asciinema v2 format for playback from the README.
+
 `cmd/brk-nat-demo` starts two localhost servers, punches one peer, runs a short keepalive loop, and prints endpoints and timing. `nat-demo.sh` launches it without flags.
 
 ## Expected Files
 
 - `build.sh`, `run.sh`, `test.sh`, `demo.sh`, `nat-demo.sh`, and `install.sh`: no-configuration launchers.
 - `cmd/brk-demo`, `cmd/brk-lossy-demo`, and `cmd/brk-nat-demo`: runnable demonstrations.
+- `assets/brk-lossy-demo.cast`: terminal recording of the visible retransmission demonstration.
 - `README.md`: installation, quickstart, API configuration, NAT behavior, and limitations.
 - `CHANGELOG.md`: tagged release behavior.
 - `.github/workflows/test.yml`: Go-version matrix, vet, tests, race tests, coverage generation, and upload.

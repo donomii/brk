@@ -66,6 +66,8 @@ Run the lossy retry demo:
 go run ./cmd/brk-lossy-demo
 ```
 
+[Play the recorded lossy retry run](assets/brk-lossy-demo.cast). The receiver deliberately skips the first acknowledgement, then the sender retransmits and records one acknowledged retry.
+
 Run the local hole-punch and keepalive demo:
 
 ```sh

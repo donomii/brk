@@ -1,0 +1,9 @@
+{"version":2,"width":120,"height":18,"timestamp":1784444253,"env":{"SHELL":"/bin/fish","TERM":"xterm-256color"}}
+[0.050000,"o","❯ go run ./cmd/brk-lossy-demo\r\n"]
+[0.531000,"o","receiver saw sequence 1016434951 attempt 1\r\n"]
+[0.604000,"o","receiver skipped first acknowledgement for sequence 1016434951\r\n"]
+[0.682000,"o","2026/07/19 14:57:33 retransmitted UDP messages: count=1\r\n"]
+[0.733000,"o","receiver saw sequence 1016434951 attempt 2\r\n"]
+[0.786000,"o","delivered after retry: retry demo\r\n"]
+[0.839000,"o","sender stats: {Sent:2 Received:1 Acked:1 Retried:1 Duplicates:0 FailedWrites:0 Dropped:0 Expired:0 Rejected:0 AuthenticationFailures:0 InvalidPackets:0}\r\n"]
+[0.920000,"o","❯ "]

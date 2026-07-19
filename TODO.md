@@ -10,4 +10,4 @@ Remaining roadmap items, roughly ordered by payoff.
 ## Repo
 
 - [x] Windows runner in the CI matrix; UDP socket behavior differs enough to be worth testing.
-- [ ] Terminal recording (GIF or asciinema) of the lossy demo embedded in the README; visible retransmission is the strongest pitch.
+- [x] Terminal recording (GIF or asciinema) of the lossy demo embedded in the README; visible retransmission is the strongest pitch.
