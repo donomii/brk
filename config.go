@@ -6,29 +6,37 @@ import (
 )
 
 const (
-	defaultBackoffMultiplier = 2.0
-	defaultJitterFraction    = 0.20
-	minimumSharedKeyBytes    = 32
+	defaultBackoffMultiplier    = 2.0
+	defaultJitterFraction       = 0.20
+	defaultMaxReassemblyGroups  = 256
+	defaultMaxReassemblyBytes   = 16 * 1024 * 1024
+	defaultMaxOrderingHeldPeer  = 256
+	defaultMaxOrderingHeldTotal = 2048
+	minimumSharedKeyBytes       = 32
 )
 
 // DefaultRetryConfig returns the documented retry settings.
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
-		QueueLength:       Qlength,
-		RetryInterval:     5 * time.Second,
-		AckTimeout:        2 * time.Second,
-		MaxAttempts:       0,
-		DuplicateTTL:      5 * time.Minute,
-		MaxPending:        Qlength,
-		BackoffMultiplier: defaultBackoffMultiplier,
-		MaxRetryDelay:     30 * time.Second,
-		JitterFraction:    defaultJitterFraction,
-		DeliveryTimeout:   time.Minute,
-		WireVersion:       ProtocolV1,
-		ReassemblyTTL:     5 * time.Minute,
+		QueueLength:         Qlength,
+		RetryInterval:       5 * time.Second,
+		AckTimeout:          2 * time.Second,
+		MaxAttempts:         0,
+		DuplicateTTL:        5 * time.Minute,
+		MaxPending:          Qlength,
+		BackoffMultiplier:   defaultBackoffMultiplier,
+		MaxRetryDelay:       30 * time.Second,
+		JitterFraction:      defaultJitterFraction,
+		DeliveryTimeout:     time.Minute,
+		WireVersion:         ProtocolV1,
+		ReassemblyTTL:       5 * time.Minute,
+		MaxReassemblyGroups: defaultMaxReassemblyGroups,
+		MaxReassemblyBytes:  defaultMaxReassemblyBytes,
 		// Ten seconds covers a lost predecessor's first retransmission
 		// (AckTimeout plus one RetryInterval scan) with margin.
-		OrderingHoldTimeout: 10 * time.Second,
+		OrderingHoldTimeout:  10 * time.Second,
+		MaxOrderingHeldPeer:  defaultMaxOrderingHeldPeer,
+		MaxOrderingHeldTotal: defaultMaxOrderingHeldTotal,
 	}
 }
 
@@ -119,11 +127,31 @@ func ResolveRetryConfig(config RetryConfig) (RetryConfig, error) {
 	} else if config.ReassemblyTTL < 0 {
 		return RetryConfig{}, fmt.Errorf("retry config invalid: expected reassembly TTL greater than zero, received %v", config.ReassemblyTTL)
 	}
+	if config.MaxReassemblyGroups == 0 {
+		config.MaxReassemblyGroups = defaults.MaxReassemblyGroups
+	} else if config.MaxReassemblyGroups < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected max reassembly groups greater than zero, received %d", config.MaxReassemblyGroups)
+	}
+	if config.MaxReassemblyBytes == 0 {
+		config.MaxReassemblyBytes = defaults.MaxReassemblyBytes
+	} else if config.MaxReassemblyBytes < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected max reassembly bytes greater than zero, received %d", config.MaxReassemblyBytes)
+	}
 
 	if config.OrderingHoldTimeout == 0 {
 		config.OrderingHoldTimeout = defaults.OrderingHoldTimeout
 	} else if config.OrderingHoldTimeout < 0 {
 		return RetryConfig{}, fmt.Errorf("retry config invalid: expected ordering hold timeout greater than zero, received %v", config.OrderingHoldTimeout)
+	}
+	if config.MaxOrderingHeldPeer == 0 {
+		config.MaxOrderingHeldPeer = defaults.MaxOrderingHeldPeer
+	} else if config.MaxOrderingHeldPeer < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected max ordering-held messages per peer greater than zero, received %d", config.MaxOrderingHeldPeer)
+	}
+	if config.MaxOrderingHeldTotal == 0 {
+		config.MaxOrderingHeldTotal = defaults.MaxOrderingHeldTotal
+	} else if config.MaxOrderingHeldTotal < 0 {
+		return RetryConfig{}, fmt.Errorf("retry config invalid: expected max ordering-held messages total greater than zero, received %d", config.MaxOrderingHeldTotal)
 	}
 
 	return config, nil

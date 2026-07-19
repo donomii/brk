@@ -119,12 +119,15 @@ type reassemblyKey struct {
 type reassemblyRecord struct {
 	key       reassemblyKey
 	startedAt time.Time
+	created   uint64
 }
 
 type reassemblyGroup struct {
 	count       int
 	parts       map[int][]byte
 	startedAt   time.Time
+	created     uint64
+	bytes       int
 	minSequence int
 	maxSequence int
 }
@@ -132,12 +135,21 @@ type reassemblyGroup struct {
 // reassemblyCache collects fragments until a group completes. Groups share
 // one TTL, so insertion order is expiry order, mirroring receivedMessageCache.
 type reassemblyCache struct {
-	groups map[reassemblyKey]*reassemblyGroup
-	queue  []reassemblyRecord
+	groups    map[reassemblyKey]*reassemblyGroup
+	queue     []reassemblyRecord
+	bytes     int
+	created   uint64
+	maxGroups int
+	maxBytes  int
+	stats     *DeliveryStats
 }
 
 func newReassemblyCache() *reassemblyCache {
-	return &reassemblyCache{groups: map[reassemblyKey]*reassemblyGroup{}}
+	return newReassemblyCacheWithLimits(defaultMaxReassemblyGroups, defaultMaxReassemblyBytes, nil)
+}
+
+func newReassemblyCacheWithLimits(maxGroups, maxBytes int, stats *DeliveryStats) *reassemblyCache {
+	return &reassemblyCache{groups: map[reassemblyKey]*reassemblyGroup{}, maxGroups: maxGroups, maxBytes: maxBytes, stats: stats}
 }
 
 // add stores one fragment and returns the assembled message once its group is
@@ -150,15 +162,47 @@ func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duratio
 	cache.prune(reassemblyTTL, now)
 	key := reassemblyKey{Address: message.Address, Port: message.Port, SessionID: message.SessionID, Group: message.FragmentGroup}
 	group, exists := cache.groups[key]
+	if exists && group.count != message.FragmentCount {
+		err := fmt.Errorf("reassemble fragment group %q from %s:%d: expected %d fragments, received a fragment claiming %d", message.FragmentGroup, message.Address, message.Port, group.count, message.FragmentCount)
+		cache.recordReassemblyRejection()
+		return UdpMessage{}, 0, false, err
+	}
+	if len(message.Data) > cache.maxBytes {
+		err := fmt.Errorf("reassemble fragment group %q from %s:%d rejected: fragment payload is %d bytes, max retained reassembly bytes is %d", message.FragmentGroup, message.Address, message.Port, len(message.Data), cache.maxBytes)
+		cache.recordReassemblyRejection()
+		return UdpMessage{}, 0, false, err
+	}
+
+	evicted := 0
 	if !exists {
-		group = &reassemblyGroup{count: message.FragmentCount, parts: map[int][]byte{}, startedAt: now, minSequence: message.Sequence, maxSequence: message.Sequence}
+		for len(cache.groups) >= cache.maxGroups {
+			if !cache.evictOldest(reassemblyKey{}, false) {
+				break
+			}
+			evicted++
+		}
+		cache.created++
+		group = &reassemblyGroup{count: message.FragmentCount, parts: map[int][]byte{}, startedAt: now, created: cache.created, minSequence: message.Sequence, maxSequence: message.Sequence}
 		cache.groups[key] = group
-		cache.queue = append(cache.queue, reassemblyRecord{key: key, startedAt: now})
+		cache.queue = append(cache.queue, reassemblyRecord{key: key, startedAt: now, created: group.created})
 	}
-	if group.count != message.FragmentCount {
-		return UdpMessage{}, 0, false, fmt.Errorf("reassemble fragment group %q from %s:%d: expected %d fragments, received a fragment claiming %d", message.FragmentGroup, message.Address, message.Port, group.count, message.FragmentCount)
+
+	previous := group.parts[message.FragmentIndex]
+	additionalBytes := len(message.Data) - len(previous)
+	for additionalBytes > 0 && cache.bytes+additionalBytes > cache.maxBytes {
+		if !cache.evictOldest(key, true) {
+			err := fmt.Errorf("reassemble fragment group %q from %s:%d rejected: adding %d payload bytes would retain %d bytes, max is %d and no other incomplete group remains to evict", message.FragmentGroup, message.Address, message.Port, additionalBytes, cache.bytes+additionalBytes, cache.maxBytes)
+			cache.recordReassemblyRejection()
+			cache.recordReassemblyEvictions(message, evicted)
+			return UdpMessage{}, 0, false, err
+		}
+		evicted++
 	}
+	cache.recordReassemblyEvictions(message, evicted)
+
 	group.parts[message.FragmentIndex] = message.Data
+	group.bytes = group.bytes + additionalBytes
+	cache.bytes = cache.bytes + additionalBytes
 	if message.Sequence < group.minSequence {
 		group.minSequence = message.Sequence
 	}
@@ -169,7 +213,6 @@ func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duratio
 		return UdpMessage{}, 0, false, nil
 	}
 
-	delete(cache.groups, key)
 	total := 0
 	for _, part := range group.parts {
 		total = total + len(part)
@@ -185,19 +228,76 @@ func (cache *reassemblyCache) add(message UdpMessage, reassemblyTTL time.Duratio
 	assembled.FragmentGroup = ""
 	assembled.FragmentIndex = 0
 	assembled.FragmentCount = 0
+	cache.dropGroup(key)
+	cache.compactQueue()
 	return assembled, group.minSequence, true, nil
 }
 
 func (cache *reassemblyCache) prune(reassemblyTTL time.Duration, now time.Time) {
-	for len(cache.queue) > 0 && now.Sub(cache.queue[0].startedAt) > reassemblyTTL {
+	for len(cache.queue) > 0 {
 		record := cache.queue[0]
+		group, exists := cache.groups[record.key]
+		if exists && group.created == record.created && now.Sub(record.startedAt) <= reassemblyTTL {
+			break
+		}
 		cache.queue = cache.queue[1:]
-		// Defensive: drop only the group this exact record created.
-		if group, exists := cache.groups[record.key]; exists && group.startedAt.Equal(record.startedAt) {
-			delete(cache.groups, record.key)
+		if exists && group.created == record.created {
+			cache.dropGroup(record.key)
 		}
 	}
 	if len(cache.queue) == 0 {
 		cache.queue = nil
+	}
+}
+
+func (cache *reassemblyCache) evictOldest(excluded reassemblyKey, hasExcluded bool) bool {
+	for _, record := range cache.queue {
+		group, exists := cache.groups[record.key]
+		if !exists || group.created != record.created || hasExcluded && record.key == excluded {
+			continue
+		}
+		cache.dropGroup(record.key)
+		cache.compactQueue()
+		return true
+	}
+	return false
+}
+
+func (cache *reassemblyCache) dropGroup(key reassemblyKey) {
+	group, exists := cache.groups[key]
+	if !exists {
+		return
+	}
+	cache.bytes = cache.bytes - group.bytes
+	delete(cache.groups, key)
+}
+
+func (cache *reassemblyCache) compactQueue() {
+	if len(cache.queue) <= cache.maxGroups*2 {
+		return
+	}
+	active := cache.queue[:0]
+	for _, record := range cache.queue {
+		group, exists := cache.groups[record.key]
+		if exists && group.created == record.created {
+			active = append(active, record)
+		}
+	}
+	cache.queue = active
+}
+
+func (cache *reassemblyCache) recordReassemblyEvictions(message UdpMessage, count int) {
+	if count == 0 {
+		return
+	}
+	if cache.stats != nil {
+		cache.stats.addReassemblyEvictions(count)
+	}
+	logReassemblyEvictions(message, count, len(cache.groups), cache.bytes)
+}
+
+func (cache *reassemblyCache) recordReassemblyRejection() {
+	if cache.stats != nil {
+		cache.stats.addReassemblyRejection()
 	}
 }

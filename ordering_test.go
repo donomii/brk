@@ -96,6 +96,46 @@ func TestOrderingCacheTreatsAssembledFragmentSpanAsContiguous(t *testing.T) {
 	expectReleasedSequences(t, cache.add(assembled, 10, now), []int{12, 13})
 }
 
+func TestOrderingCacheReleasesLowestSequenceAtPeerLimit(t *testing.T) {
+	stats := NewDeliveryStats()
+	cache := newOrderingCacheWithLimits(2, 10, stats)
+	session := SessionID("00112233445566778899aabbccddeeff")
+	now := time.Now()
+	expectReleasedSequences(t, cache.add(orderedTestMessage(session, 10), 10, now), []int{10})
+	expectReleasedSequences(t, cache.add(orderedTestMessage(session, 12), 12, now), nil)
+	expectReleasedSequences(t, cache.add(orderedTestMessage(session, 14), 14, now), nil)
+	expectReleasedSequences(t, cache.add(orderedTestMessage(session, 16), 16, now), []int{12})
+
+	stream := cache.streams[orderingStreamKey{Address: "10.0.0.1", Port: 5000, SessionID: session}]
+	if cache.held != 2 || len(stream.held) != 2 {
+		t.Fatalf("per-peer ordering limit mismatch: expected two held messages, received cache=%d peer=%d", cache.held, len(stream.held))
+	}
+	if snapshot := stats.Snapshot(); snapshot.OrderingCapacityReleases != 1 {
+		t.Fatalf("per-peer ordering stats mismatch: expected one capacity release, received %d", snapshot.OrderingCapacityReleases)
+	}
+}
+
+func TestOrderingCacheReleasesOldestStreamHeadAtGlobalLimit(t *testing.T) {
+	stats := NewDeliveryStats()
+	cache := newOrderingCacheWithLimits(4, 2, stats)
+	now := time.Now()
+	sessions := []SessionID{"00112233445566778899aabbccddeeff", "11112222333344445555666677778888", "9999aaaabbbbccccddddeeeeffff0000"}
+	for _, session := range sessions {
+		expectReleasedSequences(t, cache.add(orderedTestMessage(session, 10), 10, now), []int{10})
+	}
+	expectReleasedSequences(t, cache.add(orderedTestMessage(sessions[0], 12), 12, now), nil)
+	expectReleasedSequences(t, cache.add(orderedTestMessage(sessions[1], 12), 12, now), nil)
+	expectReleasedSequences(t, cache.add(orderedTestMessage(sessions[2], 12), 12, now), []int{12})
+
+	first := cache.streams[orderingStreamKey{Address: "10.0.0.1", Port: 5000, SessionID: sessions[0]}]
+	if cache.held != 2 || len(first.held) != 0 {
+		t.Fatalf("global ordering limit mismatch: expected oldest stream released with two messages retained, received held=%d oldest=%d", cache.held, len(first.held))
+	}
+	if snapshot := stats.Snapshot(); snapshot.OrderingCapacityReleases != 1 {
+		t.Fatalf("global ordering stats mismatch: expected one capacity release, received %d", snapshot.OrderingCapacityReleases)
+	}
+}
+
 func TestResolveRetryConfigOrderingValues(t *testing.T) {
 	config, err := ResolveRetryConfig(RetryConfig{})
 	if err != nil {

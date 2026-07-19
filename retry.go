@@ -29,16 +29,16 @@ func StartRetryUdpContext(ctx context.Context, hostName, portNum string, config 
 		return nil, err
 	}
 
+	stats := NewDeliveryStats()
 	seenCache := newReceivedMessageCache()
-	reassembly := newReassemblyCache()
-	ordering := newOrderingCache()
+	reassembly := newReassemblyCacheWithLimits(resolved.MaxReassemblyGroups, resolved.MaxReassemblyBytes, stats)
+	ordering := newOrderingCacheWithLimits(resolved.MaxOrderingHeldPeer, resolved.MaxOrderingHeldTotal, stats)
 	cache := map[int]retryCacheEntry{}
 	cacheLock := sync.Mutex{}
 	appincoming := make(chan UdpMessage, resolved.QueueLength)
 	appoutgoing := make(chan UdpMessage, resolved.QueueLength)
 	requests := make(chan outboundRequest, resolved.QueueLength)
 	writeResults := make(chan WriteResult, resolved.MaxPending)
-	stats := NewDeliveryStats()
 	retryCtx, retryCancel := context.WithCancel(ctx)
 	retryDone := make(chan struct{})
 

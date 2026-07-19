@@ -189,6 +189,81 @@ func TestReassemblyCacheExpiresPartialGroups(t *testing.T) {
 	}
 }
 
+func TestReassemblyCacheEvictsOldestGroupAtGroupLimit(t *testing.T) {
+	stats := NewDeliveryStats()
+	cache := newReassemblyCacheWithLimits(2, 100, stats)
+	now := time.Now()
+	message := func(group string, sequence int) UdpMessage {
+		return UdpMessage{Data: []byte(group), Address: "10.0.0.1", Port: 5000, SessionID: SessionID("00112233445566778899aabbccddeeff"), FragmentGroup: group, FragmentIndex: 0, FragmentCount: 2, Sequence: sequence}
+	}
+
+	first := message("11111111111111111111111111111111", 1)
+	second := message("22222222222222222222222222222222", 2)
+	third := message("33333333333333333333333333333333", 3)
+	for _, fragment := range []UdpMessage{first, second, third} {
+		if _, _, complete, err := cache.add(fragment, time.Minute, now); err != nil || complete {
+			t.Fatalf("add incomplete group %q mismatch: expected incomplete with nil error, received complete=%v error=%v", fragment.FragmentGroup, complete, err)
+		}
+	}
+
+	firstKey := reassemblyKey{Address: first.Address, Port: first.Port, SessionID: first.SessionID, Group: first.FragmentGroup}
+	if len(cache.groups) != 2 || cache.groups[firstKey] != nil {
+		t.Fatalf("group-limit eviction mismatch: expected oldest group removed with two retained, received groups=%d oldest=%v", len(cache.groups), cache.groups[firstKey] != nil)
+	}
+	if snapshot := stats.Snapshot(); snapshot.ReassemblyEvictions != 1 || snapshot.ReassemblyRejections != 0 {
+		t.Fatalf("group-limit stats mismatch: expected evictions=1 rejections=0, received evictions=%d rejections=%d", snapshot.ReassemblyEvictions, snapshot.ReassemblyRejections)
+	}
+}
+
+func TestReassemblyCacheEvictsForByteLimitAndRejectsCurrentGroupOverflow(t *testing.T) {
+	stats := NewDeliveryStats()
+	cache := newReassemblyCacheWithLimits(4, 5, stats)
+	now := time.Now()
+	session := SessionID("00112233445566778899aabbccddeeff")
+	first := UdpMessage{Data: []byte("aaa"), Address: "10.0.0.1", Port: 5000, SessionID: session, FragmentGroup: "11111111111111111111111111111111", FragmentIndex: 0, FragmentCount: 2, Sequence: 1}
+	second := UdpMessage{Data: []byte("bbb"), Address: "10.0.0.1", Port: 5000, SessionID: session, FragmentGroup: "22222222222222222222222222222222", FragmentIndex: 0, FragmentCount: 2, Sequence: 2}
+
+	if _, _, _, err := cache.add(first, time.Minute, now); err != nil {
+		t.Fatalf("add first byte-limited group failed: expected nil error, received %v", err)
+	}
+	if _, _, _, err := cache.add(second, time.Minute, now); err != nil {
+		t.Fatalf("add second byte-limited group failed: expected nil error, received %v", err)
+	}
+	if cache.bytes != 3 || len(cache.groups) != 1 {
+		t.Fatalf("byte-limit eviction mismatch: expected bytes=3 groups=1, received bytes=%d groups=%d", cache.bytes, len(cache.groups))
+	}
+
+	secondTail := second
+	secondTail.Data = []byte("ccc")
+	secondTail.FragmentIndex = 1
+	secondTail.Sequence = 3
+	if _, _, _, err := cache.add(secondTail, time.Minute, now); err == nil {
+		t.Fatalf("byte-limit rejection mismatch: expected error, received nil")
+	}
+	if cache.bytes != 3 || len(cache.groups) != 1 {
+		t.Fatalf("byte-limit rejection changed retained state: expected bytes=3 groups=1, received bytes=%d groups=%d", cache.bytes, len(cache.groups))
+	}
+	if snapshot := stats.Snapshot(); snapshot.ReassemblyEvictions != 1 || snapshot.ReassemblyRejections != 1 {
+		t.Fatalf("byte-limit stats mismatch: expected evictions=1 rejections=1, received evictions=%d rejections=%d", snapshot.ReassemblyEvictions, snapshot.ReassemblyRejections)
+	}
+}
+
+func TestReassemblyCacheRejectsFragmentLargerThanByteLimit(t *testing.T) {
+	stats := NewDeliveryStats()
+	cache := newReassemblyCacheWithLimits(4, 5, stats)
+	fragment := UdpMessage{Data: []byte("123456"), Address: "10.0.0.1", Port: 5000, SessionID: SessionID("00112233445566778899aabbccddeeff"), FragmentGroup: "11111111111111111111111111111111", FragmentIndex: 0, FragmentCount: 2, Sequence: 1}
+
+	if _, _, _, err := cache.add(fragment, time.Minute, time.Now()); err == nil {
+		t.Fatalf("oversized fragment mismatch: expected error, received nil")
+	}
+	if cache.bytes != 0 || len(cache.groups) != 0 {
+		t.Fatalf("oversized fragment changed retained state: expected bytes=0 groups=0, received bytes=%d groups=%d", cache.bytes, len(cache.groups))
+	}
+	if snapshot := stats.Snapshot(); snapshot.ReassemblyRejections != 1 {
+		t.Fatalf("oversized fragment stats mismatch: expected one rejection, received %d", snapshot.ReassemblyRejections)
+	}
+}
+
 func TestRetryServersDeliverLargeFragmentedMessage(t *testing.T) {
 	for _, version := range []ProtocolVersion{ProtocolV1, ProtocolV2} {
 		version := version

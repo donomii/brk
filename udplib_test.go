@@ -50,6 +50,12 @@ func TestResolveRetryConfigUsesDefaults(t *testing.T) {
 	if len(config.AuthenticationKey) != 0 {
 		t.Fatalf("authentication key mismatch: expected empty key, received %d bytes", len(config.AuthenticationKey))
 	}
+	if config.MaxReassemblyGroups != defaultMaxReassemblyGroups || config.MaxReassemblyBytes != defaultMaxReassemblyBytes {
+		t.Fatalf("reassembly limits mismatch: expected groups=%d bytes=%d, received groups=%d bytes=%d", defaultMaxReassemblyGroups, defaultMaxReassemblyBytes, config.MaxReassemblyGroups, config.MaxReassemblyBytes)
+	}
+	if config.MaxOrderingHeldPeer != defaultMaxOrderingHeldPeer || config.MaxOrderingHeldTotal != defaultMaxOrderingHeldTotal {
+		t.Fatalf("ordering limits mismatch: expected peer=%d total=%d, received peer=%d total=%d", defaultMaxOrderingHeldPeer, defaultMaxOrderingHeldTotal, config.MaxOrderingHeldPeer, config.MaxOrderingHeldTotal)
+	}
 }
 
 func TestResolveRetryConfigRejectsInvalidValues(t *testing.T) {
@@ -106,6 +112,26 @@ func TestResolveRetryConfigRejectsInvalidValues(t *testing.T) {
 	_, err = ResolveRetryConfig(RetryConfig{AuthenticationKey: []byte("short")})
 	if err == nil {
 		t.Fatalf("short authentication key mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxReassemblyGroups: -1})
+	if err == nil {
+		t.Fatalf("negative max reassembly groups mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxReassemblyBytes: -1})
+	if err == nil {
+		t.Fatalf("negative max reassembly bytes mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxOrderingHeldPeer: -1})
+	if err == nil {
+		t.Fatalf("negative max ordering-held peer mismatch: expected error, received nil")
+	}
+
+	_, err = ResolveRetryConfig(RetryConfig{MaxOrderingHeldTotal: -1})
+	if err == nil {
+		t.Fatalf("negative max ordering-held total mismatch: expected error, received nil")
 	}
 }
 

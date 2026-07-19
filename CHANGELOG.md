@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bounded incomplete fragment reassembly by configurable group and byte limits, and bounded ordered-delivery hold queues per peer and globally, with capacity statistics and deterministic release behavior.
 - Added the opt-in `ProtocolV2` binary wire format: a 44-byte header with raw payload and a 32-byte HMAC trailer, detected automatically on receive alongside version 1 and legacy JSON.
 - Added the `Logf` package variable so applications can route brk diagnostics into their own logger.
 - Replaced per-message duplicate-cache scans with an expiry-ordered queue, making inbound bookkeeping proportional to expired entries instead of all cached entries.

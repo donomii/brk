@@ -54,6 +54,14 @@ func logReassemblyFailure(message UdpMessage, err error) {
 	Logf("reassemble UDP fragment failed: session_id=%s group=%s index=%d count=%d source=%s:%d error=%v", message.SessionID, message.FragmentGroup, message.FragmentIndex, message.FragmentCount, message.Address, message.Port, err)
 }
 
+func logReassemblyEvictions(message UdpMessage, count, groups, bytes int) {
+	Logf("evicted incomplete UDP fragment groups for reassembly capacity: evicted=%d retained_groups=%d retained_bytes=%d incoming_group=%s source=%s:%d", count, groups, bytes, message.FragmentGroup, message.Address, message.Port)
+}
+
+func logOrderingCapacityReleases(count, held, perPeerLimit, totalLimit int) {
+	Logf("released ordered UDP messages for hold capacity: released=%d retained=%d per_peer_limit=%d total_limit=%d", count, held, perPeerLimit, totalLimit)
+}
+
 func logSTUNPacketFailure(source netip.AddrPort, err error) {
 	Logf("handle STUN packet failed: source=%v error=%v", source, err)
 }

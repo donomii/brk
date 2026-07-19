@@ -26,6 +26,7 @@ type heldMessage struct {
 	// or the lowest fragment sequence of a reassembled message.
 	spanStart int
 	heldAt    time.Time
+	order     uint64
 }
 
 type orderingStream struct {
@@ -36,11 +37,20 @@ type orderingStream struct {
 }
 
 type orderingCache struct {
-	streams map[orderingStreamKey]*orderingStream
+	streams    map[orderingStreamKey]*orderingStream
+	held       int
+	nextOrder  uint64
+	maxPerPeer int
+	maxTotal   int
+	stats      *DeliveryStats
 }
 
 func newOrderingCache() *orderingCache {
-	return &orderingCache{streams: map[orderingStreamKey]*orderingStream{}}
+	return newOrderingCacheWithLimits(defaultMaxOrderingHeldPeer, defaultMaxOrderingHeldTotal, nil)
+}
+
+func newOrderingCacheWithLimits(maxPerPeer, maxTotal int, stats *DeliveryStats) *orderingCache {
+	return &orderingCache{streams: map[orderingStreamKey]*orderingStream{}, maxPerPeer: maxPerPeer, maxTotal: maxTotal, stats: stats}
 }
 
 // add accepts one deliverable message covering sequences [spanStart,
@@ -55,15 +65,17 @@ func (cache *orderingCache) add(message UdpMessage, spanStart int, now time.Time
 	}
 	stream.lastActivity = now
 	if stream.started && spanStart > stream.highestDelivered+1 {
-		stream.hold(message, spanStart, now)
-		return nil
+		cache.nextOrder++
+		stream.hold(message, spanStart, now, cache.nextOrder)
+		cache.held++
+		return cache.enforceLimits(stream)
 	}
 	if !stream.started || message.Sequence > stream.highestDelivered {
 		stream.highestDelivered = message.Sequence
 	}
 	stream.started = true
 	released := []UdpMessage{message}
-	return append(released, stream.drainContiguous()...)
+	return append(released, cache.drainContiguous(stream)...)
 }
 
 // flush releases every held message whose gap wait reached holdTimeout plus
@@ -72,7 +84,7 @@ func (cache *orderingCache) flush(holdTimeout, idleTTL time.Duration, now time.T
 	var released []UdpMessage
 	for key, stream := range cache.streams {
 		for len(stream.held) > 0 && (stream.held[0].spanStart <= stream.highestDelivered+1 || now.Sub(stream.held[0].heldAt) >= holdTimeout) {
-			released = append(released, stream.releaseHead())
+			released = append(released, cache.releaseHead(stream))
 		}
 		if len(stream.held) == 0 && now.Sub(stream.lastActivity) > idleTTL {
 			delete(cache.streams, key)
@@ -81,24 +93,25 @@ func (cache *orderingCache) flush(holdTimeout, idleTTL time.Duration, now time.T
 	return released
 }
 
-func (stream *orderingStream) hold(message UdpMessage, spanStart int, now time.Time) {
+func (stream *orderingStream) hold(message UdpMessage, spanStart int, now time.Time, order uint64) {
 	at := sort.Search(len(stream.held), func(index int) bool { return stream.held[index].spanStart > spanStart })
 	stream.held = append(stream.held, heldMessage{})
 	copy(stream.held[at+1:], stream.held[at:])
-	stream.held[at] = heldMessage{message: message, spanStart: spanStart, heldAt: now}
+	stream.held[at] = heldMessage{message: message, spanStart: spanStart, heldAt: now, order: order}
 }
 
-func (stream *orderingStream) drainContiguous() []UdpMessage {
+func (cache *orderingCache) drainContiguous(stream *orderingStream) []UdpMessage {
 	var released []UdpMessage
 	for len(stream.held) > 0 && stream.held[0].spanStart <= stream.highestDelivered+1 {
-		released = append(released, stream.releaseHead())
+		released = append(released, cache.releaseHead(stream))
 	}
 	return released
 }
 
-func (stream *orderingStream) releaseHead() UdpMessage {
+func (cache *orderingCache) releaseHead(stream *orderingStream) UdpMessage {
 	head := stream.held[0]
 	stream.held = stream.held[1:]
+	cache.held--
 	if len(stream.held) == 0 {
 		stream.held = nil
 	}
@@ -106,6 +119,53 @@ func (stream *orderingStream) releaseHead() UdpMessage {
 		stream.highestDelivered = head.message.Sequence
 	}
 	return head.message
+}
+
+func (cache *orderingCache) enforceLimits(stream *orderingStream) []UdpMessage {
+	var released []UdpMessage
+	evicted := 0
+	for len(stream.held) > cache.maxPerPeer {
+		released = append(released, cache.releaseHead(stream))
+		released = append(released, cache.drainContiguous(stream)...)
+		evicted++
+	}
+	for cache.held > cache.maxTotal {
+		oldest := cache.oldestHeldStream()
+		if oldest == nil {
+			break
+		}
+		released = append(released, cache.releaseHead(oldest))
+		released = append(released, cache.drainContiguous(oldest)...)
+		evicted++
+	}
+	cache.recordOrderingCapacityReleases(evicted)
+	return released
+}
+
+func (cache *orderingCache) oldestHeldStream() *orderingStream {
+	var oldest *orderingStream
+	var oldestOrder uint64
+	for _, stream := range cache.streams {
+		if len(stream.held) == 0 {
+			continue
+		}
+		order := stream.held[0].order
+		if oldest == nil || order < oldestOrder {
+			oldest = stream
+			oldestOrder = order
+		}
+	}
+	return oldest
+}
+
+func (cache *orderingCache) recordOrderingCapacityReleases(count int) {
+	if count == 0 {
+		return
+	}
+	if cache.stats != nil {
+		cache.stats.addOrderingCapacityReleases(count)
+	}
+	logOrderingCapacityReleases(count, cache.held, cache.maxPerPeer, cache.maxTotal)
 }
 
 // orderingFlushInterval is how often held messages are checked for gap

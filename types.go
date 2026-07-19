@@ -136,6 +136,10 @@ type RetryConfig struct {
 	// ReassemblyTTL is how long a partial fragment group waits for its
 	// remaining fragments before it is discarded.
 	ReassemblyTTL time.Duration
+	// MaxReassemblyGroups limits incomplete inbound fragment groups.
+	MaxReassemblyGroups int
+	// MaxReassemblyBytes limits payload bytes retained by incomplete groups.
+	MaxReassemblyBytes int
 	// OrderedDelivery holds each peer session's inbound messages back until
 	// every earlier sequence is delivered, so Incoming preserves the sender's
 	// order. Off by default.
@@ -143,6 +147,10 @@ type RetryConfig struct {
 	// OrderingHoldTimeout is how long an out-of-order message waits for its
 	// sequence gap to fill before its stream releases it anyway.
 	OrderingHoldTimeout time.Duration
+	// MaxOrderingHeldPeer limits out-of-order messages held for one peer session.
+	MaxOrderingHeldPeer int
+	// MaxOrderingHeldTotal limits out-of-order messages held across every peer session.
+	MaxOrderingHeldTotal int
 }
 
 // STUNConfig selects a STUN server and the exchange deadline.
@@ -161,17 +169,20 @@ type ExternalAddress struct {
 
 // DeliveryStatsSnapshot is a point-in-time copy of a server's delivery counters.
 type DeliveryStatsSnapshot struct {
-	Sent                   uint64
-	Received               uint64
-	Acked                  uint64
-	Retried                uint64
-	Duplicates             uint64
-	FailedWrites           uint64
-	Dropped                uint64
-	Expired                uint64
-	Rejected               uint64
-	AuthenticationFailures uint64
-	InvalidPackets         uint64
+	Sent                     uint64
+	Received                 uint64
+	Acked                    uint64
+	Retried                  uint64
+	Duplicates               uint64
+	FailedWrites             uint64
+	Dropped                  uint64
+	Expired                  uint64
+	Rejected                 uint64
+	AuthenticationFailures   uint64
+	InvalidPackets           uint64
+	ReassemblyEvictions      uint64
+	ReassemblyRejections     uint64
+	OrderingCapacityReleases uint64
 }
 
 // SendRequest describes one receipt-tracked retry message.

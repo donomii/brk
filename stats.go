@@ -77,3 +77,21 @@ func (stats *DeliveryStats) addInvalidPacket() {
 	defer stats.lock.Unlock()
 	stats.snapshot.InvalidPackets = stats.snapshot.InvalidPackets + 1
 }
+
+func (stats *DeliveryStats) addReassemblyEvictions(count int) {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.ReassemblyEvictions = stats.snapshot.ReassemblyEvictions + uint64(count)
+}
+
+func (stats *DeliveryStats) addReassemblyRejection() {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.ReassemblyRejections = stats.snapshot.ReassemblyRejections + 1
+}
+
+func (stats *DeliveryStats) addOrderingCapacityReleases(count int) {
+	stats.lock.Lock()
+	defer stats.lock.Unlock()
+	stats.snapshot.OrderingCapacityReleases = stats.snapshot.OrderingCapacityReleases + uint64(count)
+}

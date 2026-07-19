@@ -58,8 +58,12 @@ Diagnostic log lines write through the package variable `Logf`, which defaults t
 - `WireVersion`: outgoing packet format, `1` (JSON) or `2` (binary). Default: `1`. Inbound packets of every version are always accepted.
 - `FragmentPayloadBytes`: application bytes carried by one fragment. Zero uses a wire-version-specific path-MTU-safe value.
 - `ReassemblyTTL`: maximum age of an incomplete inbound fragment group. Default: `5m`.
+- `MaxReassemblyGroups`: maximum incomplete inbound fragment groups. Default: `256`.
+- `MaxReassemblyBytes`: maximum fragment payload bytes retained by incomplete inbound groups. Default: `16 MiB`.
 - `OrderedDelivery`: whether each peer session's messages wait for earlier sequences. Default: `false`.
 - `OrderingHoldTimeout`: maximum wait for a missing earlier sequence before later messages are released. Default: `10s`.
+- `MaxOrderingHeldPeer`: maximum out-of-order messages held for one peer session. Default: `256`.
+- `MaxOrderingHeldTotal`: maximum out-of-order messages held across all peer sessions. Default: `2048`.
 
 `SendRequest`
 
@@ -98,6 +102,9 @@ Diagnostic log lines write through the package variable `Logf`, which defaults t
 - `Rejected`: messages rejected before entering the pending cache.
 - `AuthenticationFailures`: inbound retry packets rejected by HMAC policy or verification.
 - `InvalidPackets`: inbound retry packets rejected by protocol validation.
+- `ReassemblyEvictions`: incomplete fragment groups evicted for configured group or byte capacity.
+- `ReassemblyRejections`: fragments rejected after wire validation because of retained group state or byte capacity.
+- `OrderingCapacityReleases`: held messages released before their timeout for configured per-peer or total capacity.
 
 ## Packet Format
 
@@ -138,9 +145,9 @@ When application code queues an outgoing message:
 5. Store each valid message or fragment atomically with attempt count 1 and write-in-flight state.
 6. Dispatch the initial write through the network outgoing queue.
 
-The receiver acknowledges fragments independently and delivers only a complete reassembly. Partial groups expire after `ReassemblyTTL`. A fragmented delivery completes as acknowledged only after every fragment is acknowledged; the first terminal fragment failure completes the group delivery.
+The receiver acknowledges fragments independently and delivers only a complete reassembly. Partial groups expire after `ReassemblyTTL`. A new group at `MaxReassemblyGroups` evicts the oldest incomplete group. When `MaxReassemblyBytes` would be exceeded, the receiver evicts oldest incomplete groups other than the group receiving the fragment. If no other group remains and the fragment still cannot fit, the receiver rejects that fragment and retains the group's earlier parts. `ReassemblyEvictions` counts groups removed for either capacity limit; `ReassemblyRejections` counts state conflicts and byte-capacity rejections. A fragmented delivery completes as acknowledged only after every fragment is acknowledged; the first terminal fragment failure completes the group delivery.
 
-With `OrderedDelivery`, each source endpoint and session has a hold-back queue keyed by sequence. Contiguous messages are released in order. A gap that remains for `OrderingHoldTimeout` releases the next held message so traffic sent to a different target cannot stall the stream indefinitely.
+With `OrderedDelivery`, each source endpoint and session has a hold-back queue keyed by sequence. Contiguous messages are released in order. A gap that remains for `OrderingHoldTimeout` releases the next held message so traffic sent to a different target cannot stall the stream indefinitely. Exceeding `MaxOrderingHeldPeer` immediately releases that peer's lowest held sequence. Exceeding `MaxOrderingHeldTotal` immediately releases the eligible stream head that entered a hold queue first. A capacity release advances that stream normally, so it also releases any newly contiguous messages; no message is dropped. `OrderingCapacityReleases` counts the heads released to enforce either limit.
 
 The UDP writer returns a `WriteResult` containing the session ID, message ID, sequence, normalized target, completion time, exact error, and whether the error is permanent. A successful or retriable failed write clears in-flight state and schedules one retry time. A permanent error, or a failed final attempt, removes the entry and completes it as `failed/write_failure`.
 
