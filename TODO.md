@@ -5,6 +5,7 @@ Remaining roadmap items, roughly ordered by payoff.
 ## Features
 
 - [x] Large-message fragmentation and reassembly, so callers stop caring about datagram size limits.
+- [x] Reject a fragmented send before dispatch unless the pending queue can hold its complete fragment group.
 - [x] Opt-in per-peer ordered delivery (hold-back queue) for FIFO delivery without switching to TCP.
 
 ## Repo

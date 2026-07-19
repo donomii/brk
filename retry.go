@@ -525,6 +525,13 @@ func queueOutgoingRequest(ctx context.Context, config RetryConfig, sessionID Ses
 	if len(request.Message.Data) <= limit {
 		return queuePreparedMessage(ctx, config, sessionID, request.Message, request.Delivery, nil, cache, cacheLock, netoutgoing, stats, now)
 	}
+	fragmentCount := 1 + (len(request.Message.Data)-1)/limit
+	pending, available := pendingCapacity(cache, cacheLock, config.MaxPending)
+	if fragmentCount > available {
+		err := fmt.Errorf("queue fragmented retry UDP message %q to %s:%d failed: expected %d free pending slots for %d-byte payload at %d bytes per fragment, available %d of limit %d with %d pending messages", request.Message.MessageID, request.Message.Address, request.Message.Port, fragmentCount, len(request.Message.Data), limit, available, config.MaxPending, pending)
+		rejectOutgoingEntry(retryCacheEntry{Message: request.Message, AcceptedAt: now, Delivery: request.Delivery}, err, DeliveryReasonPendingLimit, now, stats)
+		return true
+	}
 
 	fragments, err := fragmentOutgoingMessage(request.Message, limit)
 	if err != nil {
@@ -541,6 +548,13 @@ func queueOutgoingRequest(ctx context.Context, config RetryConfig, sessionID Ses
 		}
 	}
 	return true
+}
+
+func pendingCapacity(cache map[int]retryCacheEntry, cacheLock *sync.Mutex, maximum int) (int, int) {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+	pending := len(cache)
+	return pending, maximum - pending
 }
 
 func queuePreparedMessage(ctx context.Context, config RetryConfig, sessionID SessionID, message UdpMessage, delivery *Delivery, group *fragmentGroupDelivery, cache map[int]retryCacheEntry, cacheLock *sync.Mutex, netoutgoing chan UdpMessage, stats *DeliveryStats, now time.Time) bool {

@@ -3,6 +3,8 @@ package brk
 import (
 	"bytes"
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -49,6 +51,44 @@ func TestFragmentOutgoingMessageCopiesPayloadSlices(t *testing.T) {
 	data[0] = 'x'
 	if fragments[0].Data[0] != 'z' {
 		t.Fatalf("fragment payload ownership mismatch: expected fragment to keep %q after caller mutation, received %q", "z", string(fragments[0].Data[0]))
+	}
+}
+
+func TestFragmentedMessageRejectsBeforeQueueingWhenEveryFragmentCannotFit(t *testing.T) {
+	config := fastRetryConfig()
+	config.FragmentPayloadBytes = 4
+	config.MaxPending = 2
+	messageID := MessageID("ffeeddccbbaa99887766554433221100")
+	delivery := newDelivery(messageID)
+	request := outboundRequest{Message: UdpMessage{Data: []byte("eightbit"), Address: "127.0.0.1", Port: 9000, MessageID: messageID}, Delivery: delivery}
+	cache := map[int]retryCacheEntry{41: {Message: UdpMessage{Sequence: 41}}}
+	cacheLock := sync.Mutex{}
+	networkOutgoing := make(chan UdpMessage, 2)
+	stats := NewDeliveryStats()
+
+	if continued := queueOutgoingRequest(context.Background(), config, SessionID("00112233445566778899aabbccddeeff"), request, cache, &cacheLock, networkOutgoing, stats); !continued {
+		t.Fatalf("fragmented pending rejection stopped forwarding: expected true, received false")
+	}
+	result, err := delivery.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("wait for fragmented pending rejection failed: expected nil error, received %v", err)
+	}
+	if result.Status != DeliveryRejected || result.Reason != DeliveryReasonPendingLimit {
+		t.Fatalf("fragmented pending result mismatch: expected rejected/pending_limit, received %+v", result)
+	}
+	if !strings.Contains(result.WriteError, "expected 2 free pending slots") || !strings.Contains(result.WriteError, "available 1 of limit 2 with 1 pending messages") {
+		t.Fatalf("fragmented pending error mismatch: expected required and available capacity, received %q", result.WriteError)
+	}
+	if len(cache) != 1 {
+		t.Fatalf("fragmented pending cache mismatch: expected the existing entry only, received %d entries", len(cache))
+	}
+	select {
+	case fragment := <-networkOutgoing:
+		t.Fatalf("fragmented pending dispatch mismatch: expected no partial group, received sequence=%d index=%d count=%d", fragment.Sequence, fragment.FragmentIndex, fragment.FragmentCount)
+	default:
+	}
+	if stats.Snapshot().Rejected != 1 {
+		t.Fatalf("fragmented pending rejection count mismatch: expected 1, received %d", stats.Snapshot().Rejected)
 	}
 }
 

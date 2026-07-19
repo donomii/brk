@@ -56,6 +56,10 @@ Diagnostic log lines write through the package variable `Logf`, which defaults t
 - `DisableDeliveryTimeout`: removes the default deadline when true. Default: `false`.
 - `AuthenticationKey`: optional shared HMAC-SHA256 key. Empty disables authentication; configured keys contain at least 32 bytes.
 - `WireVersion`: outgoing packet format, `1` (JSON) or `2` (binary). Default: `1`. Inbound packets of every version are always accepted.
+- `FragmentPayloadBytes`: application bytes carried by one fragment. Zero uses a wire-version-specific path-MTU-safe value.
+- `ReassemblyTTL`: maximum age of an incomplete inbound fragment group. Default: `5m`.
+- `OrderedDelivery`: whether each peer session's messages wait for earlier sequences. Default: `false`.
+- `OrderingHoldTimeout`: maximum wait for a missing earlier sequence before later messages are released. Default: `10s`.
 
 `SendRequest`
 
@@ -128,10 +132,15 @@ When authentication is enabled, HMAC-SHA256 covers the compact fixed-order versi
 When application code queues an outgoing message:
 
 1. Copy payload data and assign version, session ID, message ID, sequence, accepted time, and deadline.
-2. Validate deadline, target, IDs, authentication, encoded size, and pending capacity.
-3. Reject invalid or over-capacity messages with one terminal receipt and increment `Rejected`.
-4. Store a valid message atomically with attempt count 1 and write-in-flight state.
-5. Dispatch the initial write through the network outgoing queue.
+2. Split payloads above `FragmentPayloadBytes` into indexed fragments with one group identity. Reject the whole send before dispatch unless every fragment fits the remaining pending capacity.
+3. Validate deadline, target, IDs, authentication, encoded size, and pending capacity.
+4. Reject invalid or over-capacity messages with one terminal receipt and increment `Rejected`.
+5. Store each valid message or fragment atomically with attempt count 1 and write-in-flight state.
+6. Dispatch the initial write through the network outgoing queue.
+
+The receiver acknowledges fragments independently and delivers only a complete reassembly. Partial groups expire after `ReassemblyTTL`. A fragmented delivery completes as acknowledged only after every fragment is acknowledged; the first terminal fragment failure completes the group delivery.
+
+With `OrderedDelivery`, each source endpoint and session has a hold-back queue keyed by sequence. Contiguous messages are released in order. A gap that remains for `OrderingHoldTimeout` releases the next held message so traffic sent to a different target cannot stall the stream indefinitely.
 
 The UDP writer returns a `WriteResult` containing the session ID, message ID, sequence, normalized target, completion time, exact error, and whether the error is permanent. A successful or retriable failed write clears in-flight state and schedules one retry time. A permanent error, or a failed final attempt, removes the entry and completes it as `failed/write_failure`.
 

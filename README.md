@@ -128,6 +128,10 @@ config.DeliveryTimeout = time.Minute
 config.DisableDeliveryTimeout = false
 config.AuthenticationKey = nil
 config.WireVersion = brk.ProtocolV1
+config.FragmentPayloadBytes = 0
+config.ReassemblyTTL = 5 * time.Minute
+config.OrderedDelivery = false
+config.OrderingHoldTimeout = 10 * time.Second
 ```
 
 - `QueueLength`: channel buffer size for incoming and outgoing messages.
@@ -144,6 +148,10 @@ config.WireVersion = brk.ProtocolV1
 - `DisableDeliveryTimeout`: set to `true` for no default deadline. Default: `false`.
 - `AuthenticationKey`: optional shared HMAC-SHA256 key. Empty disables authentication; configured keys require at least 32 bytes.
 - `WireVersion`: outgoing packet format, `brk.ProtocolV1` (JSON, default) or `brk.ProtocolV2` (binary). Inbound packets of every version are always accepted.
+- `FragmentPayloadBytes`: application bytes per fragment. Zero selects a path-MTU-safe value for the wire version. A fragmented send is rejected before dispatch unless every fragment fits `MaxPending`.
+- `ReassemblyTTL`: maximum age of an incomplete fragment group. Default: `5m`.
+- `OrderedDelivery`: set to `true` to deliver each peer session in sequence order. Default: `false`.
+- `OrderingHoldTimeout`: maximum wait for a missing sequence before later messages are released. Default: `10s`.
 
 With an authentication key, unsigned packets, legacy packets, altered packets, and packets signed with a different key are rejected. Authentication protects integrity and peer possession of the shared key; it does not encrypt payloads.
 
