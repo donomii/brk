@@ -312,6 +312,10 @@ func makeXORMappedAddressValue(transactionID [12]byte, endpoint netip.AddrPort) 
 }
 
 func parseSTUNBindingResponse(packet []byte, transactionID [12]byte, server string) (ExternalAddress, error) {
+	err := validateSTUNPacket(packet)
+	if err != nil {
+		return ExternalAddress{}, fmt.Errorf("parse STUN response from %q: %w", server, err)
+	}
 	if len(packet) < 20 {
 		return ExternalAddress{}, fmt.Errorf("parse STUN response from %q: expected at least 20 bytes, received %d", server, len(packet))
 	}

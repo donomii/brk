@@ -110,6 +110,8 @@ Diagnostic log lines write through the package variable `Logf`, which defaults t
 
 Encoded packets contain at most 32,768 bytes. The receive path reads one extra byte and rejects oversized datagrams before JSON decoding.
 
+Wire and STUN decoders reject arbitrary malformed, truncated, length-inconsistent, and unsupported-field packets with an error rather than panicking. Decode work and retained payloads are bounded by the wire packet limit or the STUN 16-bit message-length field.
+
 Legacy version 0 retains the original `UdpMessage` JSON object:
 
 ```json
@@ -188,7 +190,7 @@ Late acknowledgements and write results after terminal removal are ignored. Serv
 
 Endpoints are normalized with IPv4-mapped IPv6 addresses converted to IPv4. `UdpMessage.Endpoint`, `ExternalAddress.Endpoint`, `LocalEndpoint`, `SendMessageTo`, and `Send` use `netip.AddrPort`. A server bound to an explicit IPv6 literal uses one IPv6 socket; every other existing host form retains IPv4 behavior. Destination and local address families must match.
 
-The UDP reader is the only socket reader. It classifies STUN by message-type high bits and the `0x2112A442` cookie before JSON decoding. STUN length must be divisible by four and exactly match the datagram. STUN traffic does not enter application queues or application delivery counters.
+The UDP reader is the only socket reader. It classifies STUN by message-type high bits and the `0x2112A442` cookie before JSON decoding. STUN length must be divisible by four and exactly match the datagram; both temporary-socket and live-socket response parsing enforce that boundary. STUN traffic does not enter application queues or application delivery counters.
 
 Live STUN discovery serializes exchanges per server, resolves a family-compatible STUN endpoint in the caller's control path, writes from the live socket, and accepts only a response with the requested transaction and source endpoint. Caller cancellation, timeout, or server closure ends the exchange.
 

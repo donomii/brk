@@ -12,3 +12,4 @@ Remaining roadmap items, roughly ordered by payoff.
 
 - [x] Windows runner in the CI matrix; UDP socket behavior differs enough to be worth testing.
 - [x] Terminal recording (GIF or asciinema) of the lossy demo embedded in the README; visible retransmission is the strongest pitch.
+- [x] Native deterministic fuzz targets for the wire and STUN parser boundaries, covering valid round trips plus arbitrary, truncated, length-corrupt, and unknown-field input without panics or unbounded allocation.
