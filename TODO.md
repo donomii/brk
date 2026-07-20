@@ -1,6 +1,6 @@
 # TODO
 
-Remaining roadmap items, roughly ordered by payoff.
+Completed roadmap record. No unfinished task is currently recorded here.
 
 ## Features
 
